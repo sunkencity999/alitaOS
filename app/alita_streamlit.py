@@ -198,6 +198,25 @@ def transcribe_audio_bytes(audio_data: bytes, mime_type: Optional[str] = None) -
 
 def display_header():
     """Display the main header"""
+    # Global layout overrides: center Streamlit main container and remove side paddings
+    st.markdown(
+        """
+        <style>
+        section.main > div.block-container {
+          max-width: 1200px;
+          margin: 0 auto !important;
+          padding-left: 0 !important;
+          padding-right: 0 !important;
+        }
+        [data-testid="stAppViewContainer"] > .main {
+          display: flex;
+          justify-content: center;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     st.markdown("""
     <div class="main-header">
       <h1>AlitaOS</h1>
@@ -317,35 +336,42 @@ def handle_live_assistant():
         except Exception:
             continue
 
-    # Provide Start/Stop UI with transcript and animated avatar
-    st_html(
-        fr"""
+    # Provide Start/Stop UI with transcript and animated avatar (centered via Streamlit columns)
+    left_col, mid_col, right_col = st.columns([1, 8, 1], gap="small")
+    with mid_col:
+        st_html(
+            fr"""
 <style>
   :root {{
     /* inherit globals from page: light theme */
   }}
+  html, body {{ margin:0; padding:0; overflow: visible; }}
+  #outer {{ width:100%; display:block; text-align:center; }}
   #container {{
-    margin: 0 auto; width: 100%; max-width: 760px; background: var(--panel); padding: 14px; border-radius: 12px; border:1px solid var(--border);
+    margin: 0 auto !important; width: 100%; max-width: 960px; background: var(--panel); padding: 20px 24px; border-radius: 12px; border:1px solid var(--border);
+    display: inline-block; text-align: initial; overflow: visible; box-sizing: border-box;
   }}
   #alita-wrap {{ display:flex; align-items:center; gap:16px; margin-bottom:14px; }}
-  #avatar {{ width:84px; height:84px; border-radius:50%; object-fit:cover; box-shadow:0 0 0px rgba(111,125,255,0.0); transition: box-shadow 160ms ease; border:2px solid var(--border); background:#ddd; }}
+  #avatar {{ width:84px; height:84px; border-radius:50%; object-fit:cover; box-shadow:0 0 0px rgba(111,125,255,0.0); transition: box-shadow 160ms ease; border:2px solid var(--border); background:#ddd; display:block; flex:0 0 auto; }}
   #avatar.speaking {{ box-shadow:0 0 22px rgba(111,125,255,0.55); }}
-  #controls {{ display:flex; align-items:center; gap:10px; }}
+  #alita-wrap {{ display:flex; align-items:center; justify-content:center; gap:18px; margin: 0 auto 14px; width: fit-content; max-width: 100%; box-sizing:border-box; position: static; left: auto; transform: none; overflow: visible; }}
+  #controls {{ display:flex; align-items:center; justify-content:center; gap:16px; }}
   #controls button {{
-    appearance:none; border:none; padding:10px 16px; border-radius:10px; font-weight:600; cursor:pointer; color:#fff;
-    background: linear-gradient(90deg, var(--acc) 0%, var(--acc2) 100%);
+    -webkit-appearance:none; appearance:none; border:1px solid #1f232b !important; padding:10px 20px; border-radius:12px; font-weight:600; cursor:pointer;
+    color:#fff !important; background:#2b2f36 !important; min-width: 110px; font-size:14px; box-shadow:none !important;
   }}
-  #controls button#start {{ border:1px solid rgba(0,0,0,0.04); }}
-  #controls button#stop {{ border:1px solid rgba(0,0,0,0.04); }}
-  #controls button[disabled] {{ opacity:0.5; cursor:not-allowed; }}
-  #status {{ margin-left:8px; color: var(--muted); font-size: 13px; }}
-  #transcript {{ border:1px solid var(--border); border-radius:12px; padding:10px; height:clamp(220px, 32vh, 600px); overflow:auto; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--panel-2); color: var(--text); }}
+  /* specific button rules can go here if needed */
+  #controls button:hover {{ filter: brightness(1.08); }}
+  #controls button[disabled] {{ opacity:0.6; cursor:not-allowed; filter:none; }}
+  #status {{ margin-left:12px; color: var(--muted); font-size: 14px; min-width: 200px; text-align:left; display:inline-block; white-space: nowrap; }}
+  #transcript {{ border:1px solid var(--border); border-radius:12px; padding:10px; height:clamp(220px, 32vh, 600px); overflow:auto; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--panel-2); color: var(--text); max-width: 760px; margin: 0 auto; }}
   .msg {{ display:block; max-width: 100%; padding:8px 10px; border-radius:12px; margin:6px 0; line-height:1.45; white-space:pre-wrap; }}
   .u {{ background:#eceef2; color: var(--text); border:1px solid var(--border); }}
   .a {{ background:#f5f6f8; color: var(--text); border:1px solid var(--border); }}
   .role {{ display:block; font-size:11px; color: var(--muted); margin-bottom:4px; }}
 </style>
-<div id=container>
+<div id=outer>
+  <div id=container>
   <div id=alita-wrap>
     <img id=avatar src="{avatar_src}" alt="Alita Avatar" onerror="this.onerror=null; this.src='https://placehold.co/84x84?text=Alita';" />
     <div id=controls>
@@ -360,14 +386,18 @@ def handle_live_assistant():
     <pre id=rawlog style="background:var(--panel-2); border:1px solid var(--border); border-radius:10px; padding:8px; max-height:clamp(160px, 24vh, 360px); overflow:auto; color:var(--text);"></pre>
   </details>
   <audio id=remoteAudio autoplay playsinline></audio>
+  </div>
 </div>
 <script>
-  const startBtn = document.getElementById('start');
-  const stopBtn = document.getElementById('stop');
-  const statusEl = document.getElementById('status');
-  const remoteAudio = document.getElementById('remoteAudio');
-  const transcriptEl = document.getElementById('transcript');
-  const avatarEl = document.getElementById('avatar');
+    const startBtn = document.getElementById('start');
+    const stopBtn = document.getElementById('stop');
+    const statusEl = document.getElementById('status');
+    const remoteAudio = document.getElementById('remoteAudio');
+    const transcriptEl = document.getElementById('transcript');
+    const avatarEl = document.getElementById('avatar');
+    let pc, micStream;
+    let dc; // data channel
+    let analyser, audioCtx, raf;
   const rawLogEl = document.getElementById('rawlog');
   let pc, micStream;
   let dc; // data channel
@@ -565,6 +595,7 @@ def handle_live_assistant():
 </script>
         """,
         height=520,
+        width=960,
     )
 
 def handle_image_generation():
