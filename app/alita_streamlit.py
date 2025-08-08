@@ -354,7 +354,7 @@ def handle_live_assistant():
   #alita-wrap {{ display:flex; align-items:center; gap:16px; margin-bottom:14px; }}
   #avatar {{ width:84px; height:84px; border-radius:50%; object-fit:cover; box-shadow:0 0 0px rgba(111,125,255,0.0); transition: box-shadow 160ms ease; border:2px solid var(--border); background:#ddd; display:block; flex:0 0 auto; }}
   #avatar.speaking {{ box-shadow:0 0 22px rgba(111,125,255,0.55); }}
-  #alita-wrap {{ display:flex; align-items:center; justify-content:center; gap:18px; margin: 0 auto 14px; width: fit-content; max-width: 100%; box-sizing:border-box; position: static; left: auto; transform: none; overflow: visible; }}
+  #alita-wrap {{ display:flex; align-items:center; justify-content:center; gap:18px; margin: 0 auto 14px; width: fit-content; max-width: 100%; box-sizing:border-box; position: static; left: auto; transform: none; overflow: visible; margin-left: 100px; }}
   #controls {{ display:flex; align-items:center; justify-content:center; gap:16px; }}
   #controls button {{
     -webkit-appearance:none; appearance:none; border:1px solid #1f232b !important; padding:10px 20px; border-radius:12px; font-weight:600; cursor:pointer;
@@ -399,9 +399,6 @@ def handle_live_assistant():
     let dc; // data channel
     let analyser, audioCtx, raf;
   const rawLogEl = document.getElementById('rawlog');
-  let pc, micStream;
-  let dc; // data channel
-  let analyser, audioCtx, raf;
 
   function logRaw(obj, label='event') {{
     try {{
