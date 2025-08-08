@@ -1,0 +1,31 @@
+# Byte-compiled / optimized / DLL files
+*.pyc
+__pycache__/
+.pytest_cache/
+
+# Development tool folders
+.idea/
+.vscode/
+
+# macOS system files
+.DS_Store
+
+# Secrets
+.env
+
+# env  
+.venv/
+alitaOS/
+
+# Local SSL certs/keys (created by HTTPS launchers)
+.cert/
+cert.pem
+key.pem
+
+# Lock and build artifacts
+uv.lock
+node_modules/
+
+# Others
+scratchpad/
+pad/

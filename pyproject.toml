@@ -1,0 +1,22 @@
+[project]
+name = "alitaos"
+version = "0.1.0"
+description = "AlitaOS is a conversational AI assistant powered by OpenAI."
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+    "streamlit>=1.32.0",
+    "openai>=1.0.0",
+    "python-dotenv>=1.0.0",
+    "yfinance>=0.2.0",
+    "plotly>=5.0.0",
+    "requests>=2.31.0",
+    "pandas>=2.0.0",
+    "pillow>=10.0.0",
+    "numpy>=1.24.0",
+    # Live audio streaming
+    "streamlit-webrtc>=0.47.1",
+    "aiortc>=1.5.0",
+    "av>=12.0.0",
+]
