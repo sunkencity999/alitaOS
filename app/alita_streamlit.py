@@ -54,7 +54,7 @@ load_dotenv()
 st.set_page_config(
     page_title="AlitaOS",
     page_icon="🤖",
-    layout="wide",
+    layout="centered",
     initial_sidebar_state="collapsed"
 )
 
@@ -86,8 +86,12 @@ st.markdown("""
   /* Hide Streamlit black top bar and sidebar for a clean canvas */
   [data-testid="stHeader"], header[tabindex="0"], .stDeployButton { display: none !important; }
   [data-testid="stSidebar"], [data-testid="stSidebarNav"] { display: none !important; }
-  /* Ensure main content uses full width when sidebar is hidden */
-  [data-testid="stAppViewContainer"] > .main { padding-left: 1rem; padding-right: 1rem; }
+  /* Centered main container with max width */
+  [data-testid="stAppViewContainer"] > .main {
+    max-width: 1200px;
+    margin-left: auto; margin-right: auto;
+    padding-left: 1rem; padding-right: 1rem;
+  }
   /* Keep a soft panel style where we previously themed sidebar, for consistency if re-enabled */
   [data-testid="stSidebar"] > div:first-child { background: var(--panel); border-right: 1px solid var(--border); }
   [data-testid="stSidebar"] * { color: var(--text); }
@@ -200,59 +204,43 @@ def display_header():
       <div class="underline"></div>
     </div>
     <div class="top-nav">
-      <a href="#">Live Assistant</a>
+      <a href="?tab=live">Live Assistant</a>
       <span>•</span>
-      <a href="#">Chat</a>
+      <a href="?tab=chat">Chat</a>
       <span>•</span>
-      <a href="#">Images</a>
+      <a href="?tab=images">Images</a>
       <span>•</span>
-      <a href="#">Search</a>
+      <a href="?tab=search">Search</a>
       <span>•</span>
-      <a href="#">Stocks</a>
+      <a href="?tab=stocks">Stocks</a>
       <span>•</span>
-      <a href="#">Charts</a>
+      <a href="?tab=charts">Charts</a>
       <span>•</span>
-      <a href="#">Python</a>
+      <a href="?tab=python">Python</a>
     </div>
     """, unsafe_allow_html=True)
 
-def display_sidebar():
-    """Display the sidebar with tools and options"""
-    with st.sidebar:
-        st.header("🛠️ AlitaOS Tools")
-        
-        # Tool selection
-        selected_tool = st.selectbox(
-            "Choose a tool:",
-            [
-                "🎧 Live Assistant",
-                "💬 Chat Assistant",
-                "🖼️ Image Generation", 
-                "🔍 Information Search",
-                "📈 Stock Prices",
-                "📊 Data Visualization",
-                "🐍 Python Code"
-            ]
-        )
-        
-        st.markdown("---")
-        
-        # Voice section guidance
-        st.subheader("🎙️ Voice Input")
-        st.caption("Use '🎧 Live Assistant' for hands-free conversation. Or type in Chat Assistant.")
-        
-        st.markdown("---")
-        
-        # System info
-        st.subheader("ℹ️ System Info")
-        st.info(f"OpenAI API: {'✅ Connected' if os.getenv('OPENAI_API_KEY') else '❌ Not configured'}")
-        
-        # Clear chat button
-        if st.button("🗑️ Clear Chat History"):
-            st.session_state.messages = []
-            st.rerun()
-    
-    return selected_tool
+def get_selected_tool() -> str:
+    """Read the selected tool from query params (top nav links)."""
+    mapping = {
+        "live": "🎧 Live Assistant",
+        "chat": "💬 Chat Assistant",
+        "images": "🖼️ Image Generation",
+        "search": "🔍 Information Search",
+        "stocks": "📈 Stock Prices",
+        "charts": "📊 Data Visualization",
+        "python": "🐍 Python Code",
+    }
+    default_key = "live"
+    try:
+        qp = st.query_params
+        tab = qp.get("tab")
+        if isinstance(tab, list):
+            tab = tab[0] if tab else None
+        tab = tab or default_key
+    except Exception:
+        tab = default_key
+    return mapping.get(tab, mapping[default_key])
 
 def handle_chat_assistant():
     """Handle the chat assistant functionality"""
@@ -392,6 +380,44 @@ def handle_live_assistant():
   }}
 
   let lastRole = null; let lastDiv = null;
+  // Extract human-readable text from Realtime API events
+  function extractTextFromEvent(evt) {{
+    try {{
+      if (!evt) return '';
+      // Streaming deltas
+      if ((evt.type && evt.type.endsWith('.delta')) && typeof evt.delta === 'string') {{
+        return evt.delta;
+      }}
+      // Unified response format
+      if (evt.type === 'response.completed' && evt.response && Array.isArray(evt.response.output)) {{
+        let out = '';
+        for (const part of evt.response.output) {{
+          if (!part || !Array.isArray(part.content)) continue;
+          for (const c of part.content) {{
+            if ((c.type === 'output_text' || c.type === 'text') && typeof c.text === 'string') {{
+              out += c.text;
+            }}
+          }}
+        }}
+        return out;
+      }}
+      // Some SDKs send message items directly
+      if (Array.isArray(evt.items)) {{
+        let out = '';
+        for (const it of evt.items) {{
+          if (!it || !Array.isArray(it.content)) continue;
+          for (const c of it.content) {{
+            if ((c.type === 'output_text' || c.type === 'text') && typeof c.text === 'string') out += c.text;
+          }}
+        }}
+        return out;
+      }}
+      // Fallback
+      if (typeof evt.text === 'string') return evt.text;
+    }} catch (_) {{}}
+    return '';
+  }}
+
   function appendLine(role, text) {{
     if (!text) return;
     if (lastDiv && lastRole === role) {{
@@ -816,9 +842,9 @@ def main():
     """Main application function"""
     initialize_session_state()
     display_header()
-    
-    # Get selected tool from sidebar
-    selected_tool = display_sidebar()
+
+    # Get selected tool from the top navbar (no sidebar)
+    selected_tool = get_selected_tool()
     
     # Handle the selected tool
     if selected_tool == "🎧 Live Assistant":
