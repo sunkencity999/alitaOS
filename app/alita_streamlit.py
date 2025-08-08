@@ -276,13 +276,20 @@ def handle_chat_assistant():
 
 def handle_live_assistant():
     """True OpenAI Realtime 'live' API via WebRTC (browser <-> OpenAI) with local proxy."""
-    st.subheader("🎧 Live Assistant")
-    st.caption("Click Start to grant mic access. Bi-directional low-latency voice.")
+    # Centered header + caption
+    st.markdown(
+        """
+        <div style="text-align:center;margin-bottom:8px;">
+          <h2 style="margin:0;">🎧 Live Assistant</h2>
+          <div style="color:var(--muted);font-size:14px;">Click Start to grant mic access. Bi-directional low-latency voice.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    # Proxy endpoint (must be same-origin or CORS-enabled). Defaults to http(s)://localhost:8787
+    # Proxy endpoint (no UI). Defaults to http(s)://localhost:8787
     proxy_url_default = f"http{'s' if os.getenv('STREAMLIT_SERVER_ENABLE_CORS','false').lower()=='true' else ''}://localhost:" + os.getenv("ALITA_REALTIME_PORT", "8787")
-    with st.expander("⚙️ Advanced (Realtime settings)", expanded=False):
-        proxy_url = st.text_input("Realtime Proxy URL", value=os.getenv("ALITA_REALTIME_URL", proxy_url_default))
+    proxy_url = os.getenv("ALITA_REALTIME_URL", proxy_url_default)
 
     # Load avatar image from common locations and formats, prefer app/static/alita.*
     avatar_src = "https://placehold.co/144x144?text=Alita"
@@ -318,7 +325,7 @@ def handle_live_assistant():
     /* inherit globals from page: light theme */
   }}
   #container {{
-    margin: 0 auto; width: 100%; background: var(--panel); padding: 14px; border-radius: 12px; border:1px solid var(--border);
+    margin: 0 auto; width: 100%; max-width: 760px; background: var(--panel); padding: 14px; border-radius: 12px; border:1px solid var(--border);
   }}
   #alita-wrap {{ display:flex; align-items:center; gap:16px; margin-bottom:14px; }}
   #avatar {{ width:84px; height:84px; border-radius:50%; object-fit:cover; box-shadow:0 0 0px rgba(111,125,255,0.0); transition: box-shadow 160ms ease; border:2px solid var(--border); background:#ddd; }}
