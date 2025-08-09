@@ -15,6 +15,10 @@ For HTTPS (self-signed):
     --ssl-keyfile .cert/key.pem --ssl-certfile .cert/cert.pem
 """
 from fastapi import FastAPI, Response, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+import base64
+import io
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import requests
@@ -65,6 +69,65 @@ async def sdp(request: Request):
         return Response(content=resp.text, media_type="application/sdp", status_code=resp.status_code)
     except Exception as e:
         return Response(content=f"Proxy error: {e}", media_type="text/plain", status_code=500)
+
+
+class ToolPayload(BaseModel):
+    name: str
+    args: dict | None = None
+
+
+@app.post("/tool")
+async def tool_exec(payload: ToolPayload):
+    """Execute assistant tools server-side and return JSON results.
+
+    Supported tools:
+      - image.generate: {"name":"image.generate", "args":{"prompt":"..."}}
+    """
+    if not OPENAI_API_KEY:
+        return JSONResponse({"success": False, "error": "OPENAI_API_KEY not configured"}, status_code=500)
+
+    name = payload.name
+    args = payload.args or {}
+
+    if name == "image.generate":
+        prompt = args.get("prompt", "")
+        size = args.get("size", "1024x1024")
+        style = args.get("style")  # e.g., "photorealistic", "watercolor", etc.
+        if not prompt:
+            return JSONResponse({"success": False, "error": "prompt required"}, status_code=400)
+        try:
+            # Call OpenAI Images API
+            resp = requests.post(
+                "https://api.openai.com/v1/images/generations",
+                headers={
+                    "Authorization": f"Bearer {OPENAI_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "gpt-image-1",
+                    # Include style by folding into prompt; supported params vary.
+                    "prompt": f"{prompt}\n\nStyle: {style}" if style else prompt,
+                    "size": size,
+                },
+                timeout=60,
+            )
+            if resp.status_code != 200:
+                return JSONResponse({"success": False, "error": f"OpenAI error {resp.status_code}: {resp.text}"}, status_code=resp.status_code)
+            data = resp.json()
+            b64 = data.get("data", [{}])[0].get("b64_json")
+            if not b64:
+                return JSONResponse({"success": False, "error": "No image data returned"}, status_code=500)
+            # Return as data URL to make client rendering trivial
+            return JSONResponse({
+                "success": True,
+                "type": "image",
+                "mime": "image/png",
+                "data_url": f"data:image/png;base64,{b64}",
+            })
+        except Exception as e:
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+    return JSONResponse({"success": False, "error": f"unknown tool: {name}"}, status_code=400)
 
 if __name__ == "__main__":
     import uvicorn

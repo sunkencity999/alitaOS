@@ -65,6 +65,7 @@ st.markdown("""
     --bg:#ffffff; --panel:#f7f7f9; --panel-2:#f2f3f5; --border:#e6e8ec; --muted:#6b7280; --text:#1f2937; 
     --charcoal:#2b2f36; --acc:#6f7dff; --acc2:#9b5cff;
   }
+
   html, body, [data-testid="stAppViewContainer"] {
     background: var(--bg) !important; color: var(--text);
   }
@@ -364,7 +365,7 @@ def handle_live_assistant():
   #controls button:hover {{ filter: brightness(1.08); }}
   #controls button[disabled] {{ opacity:0.6; cursor:not-allowed; filter:none; }}
   #status {{ margin-left:12px; color: var(--muted); font-size: 14px; min-width: 200px; text-align:left; display:inline-block; white-space: nowrap; }}
-  #transcript {{ border:1px solid var(--border); border-radius:12px; padding:10px; height:clamp(220px, 32vh, 600px); overflow:auto; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--panel-2); color: var(--text); max-width: 760px; margin: 0 auto; }}
+  #transcript {{ border:1px solid var(--border); border-radius:12px; padding:10px; height:clamp(295px, 40vh, 675px); overflow:auto; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--panel-2); color: var(--text); max-width: 760px; margin: 0 auto; }}
   .msg {{ display:block; max-width: 100%; padding:8px 10px; border-radius:12px; margin:6px 0; line-height:1.45; white-space:pre-wrap; }}
   .u {{ background:#eceef2; color: var(--text); border:1px solid var(--border); }}
   .a {{ background:#f5f6f8; color: var(--text); border:1px solid var(--border); }}
@@ -398,7 +399,8 @@ def handle_live_assistant():
     let pc, micStream;
     let dc; // data channel
     let analyser, audioCtx, raf;
-  const rawLogEl = document.getElementById('rawlog');
+    const rawLogEl = document.getElementById('rawlog');
+    let toolBuf = '';
 
   function logRaw(obj, label='event') {{
     try {{
@@ -473,6 +475,198 @@ def handle_live_assistant():
     transcriptEl.scrollTop = transcriptEl.scrollHeight;
   }}
 
+  // Tool protocol within the embedded UI
+  function tryHandleTool(data) {{
+    // Helper: collect JSON candidates from a string using brace balance
+    function scanCandidates(str) {{
+      const list = [];
+      let depth = 0, startIdx = -1;
+      for (let i = 0; i < str.length; i++) {{
+        const ch = str[i];
+        if (ch === '{{') {{
+          if (depth === 0) startIdx = i;
+          depth++;
+        }} else if (ch === '}}') {{
+          if (depth > 0) depth--;
+          if (depth === 0 && startIdx !== -1) {{
+            list.push(str.slice(startIdx, i + 1));
+            startIdx = -1;
+          }}
+        }}
+      }}
+      return list;
+    }}
+
+    // Streamed text delta handling: accumulate into buffer and try to parse
+    try {{
+      if (typeof data === 'object' && data.type && typeof data.type === 'string' && data.type.endsWith('.delta') && typeof data.delta === 'string') {{
+        toolBuf += data.delta;
+        // Fast path: minimal length and presence of a closing brace
+        if (toolBuf.indexOf('}}') !== -1) {{
+          const cands = scanCandidates(toolBuf);
+          for (const c of cands) {{
+            try {{
+              let j = JSON.parse(c);
+              // If the parsed result is a JSON string, parse again
+              if (typeof j === 'string') {{
+                try {{ j = JSON.parse(j); }} catch {{}}
+              }}
+              const tool = normalizeTool(j, c);
+              if (tool && tool.name === 'image.generate') {{
+                toolBuf = '';
+                return runAndRender(tool);
+              }}
+            }} catch {{}}
+          }}
+          // keep buffer from growing unbounded
+          if (toolBuf.length > 4000) toolBuf = toolBuf.slice(-2000);
+        }}
+      }}
+    }} catch {{}}
+    // Normalize possible tool signal to {{name, args}}
+    function normalizeTool(obj, rawStr) {{
+      if (!obj) return null;
+      if (obj.tool && typeof obj.tool === 'object') return {{ name: obj.tool.name, args: obj.tool.args || {{}} }};
+      if (obj.name && typeof obj.name === 'string') return {{ name: obj.name, args: obj.args || {{}} }};
+      // Function-call schema: function 'generate_image' with an arguments object
+      if (typeof obj.function === 'string' && obj.arguments) {{
+        if (obj.function === 'generate_image') {{
+          const a = obj.arguments || {{}};
+          const prompt = a.prompt || a.description || '';
+          let size = a.size || '1024x1024';
+          if (typeof size === 'string') {{
+            const s = size.toLowerCase();
+            if (s === 'small') size = '512x512';
+            else if (s === 'medium') size = '1024x1024';
+            else if (s === 'large') size = '1792x1024';
+          }}
+          const style = a.style || a.image_style || null;
+          if (prompt) return {{ name: 'image.generate', args: {{ prompt, size, ...(style ? {{style}} : {{}}) }} }};
+        }}
+      }}
+      // Heuristic: plain JSON with description/prompt
+      if (typeof obj === 'object') {{
+        const prompt = (typeof obj.prompt === 'string' && obj.prompt) ? obj.prompt : (typeof obj.description === 'string' ? obj.description : null);
+        if (prompt) {{
+          // map friendly sizes
+          let size = obj.size || '1024x1024';
+          if (typeof size === 'string') {{
+            const s = size.toLowerCase();
+            if (s === 'small') size = '512x512';
+            else if (s === 'medium') size = '1024x1024';
+            else if (s === 'large') size = '1792x1024';
+          }}
+          const style = obj.style || null;
+          return {{ name: 'image.generate', args: {{ prompt, size, ...(style ? {{style}} : {{}}) }} }};
+        }}
+        // Some models emit an input object with description and size
+        if (obj.input && (obj.input.prompt || obj.input.description)) {{
+          const p = obj.input.prompt || obj.input.description;
+          let size = obj.input.size || '1024x1024';
+          if (typeof size === 'string') {{
+            const s = size.toLowerCase();
+            if (s === 'small') size = '512x512';
+            else if (s === 'medium') size = '1024x1024';
+            else if (s === 'large') size = '1792x1024';
+          }}
+          const style = obj.input.style || null;
+          return {{ name: 'image.generate', args: {{ prompt: p, size, ...(style ? {{style}} : {{}}) }} }};
+        }}
+      }}
+      // Heuristic: raw string mentions prompt/description JSON
+      if (typeof rawStr === 'string' && (/\"prompt\"\s*:\s*\"/.test(rawStr) || /\"description\"\s*:\s*\"/.test(rawStr))) {{
+        try {{ const j = JSON.parse(rawStr); return normalizeTool(j); }} catch {{}}
+      }}
+      return null;
+    }}
+
+    // Try direct object
+    try {{
+      if (typeof data === 'object') {{
+        const tool = normalizeTool(data);
+        if (tool && tool.name === 'image.generate') return runAndRender(tool);
+      }}
+    }} catch {{}}
+
+    // Try string payloads: extract JSON blocks (supports multiple back-to-back objects)
+    if (typeof data === 'string') {{
+      // Code fence case ```json ... ```
+      const fenceMatch = data.match(/```json([\s\S]*?)```/i);
+      const candidates = [];
+      if (fenceMatch && fenceMatch[1]) {{ candidates.push(fenceMatch[1]); }}
+      else {{
+        // Brace-scan to collect all balanced JSON objects
+        let depth = 0, startIdx = -1;
+        for (let i = 0; i < data.length; i++) {{
+          const ch = data[i];
+          if (ch === '{{') {{
+            if (depth === 0) startIdx = i;
+            depth++;
+          }} else if (ch === '}}') {{
+            if (depth > 0) depth--;
+            if (depth === 0 && startIdx !== -1) {{
+              candidates.push(data.slice(startIdx, i + 1));
+              startIdx = -1;
+            }}
+          }}
+        }}
+      }}
+      for (const c of candidates) {{
+        try {{
+          let j = JSON.parse(c);
+          if (typeof j === 'string') {{
+            try {{ j = JSON.parse(j); }} catch {{}}
+          }}
+          const tool = normalizeTool(j, c);
+          if (tool && tool.name === 'image.generate') return runAndRender(tool);
+        }} catch {{}}
+      }}
+    }}
+    return false;
+    function runAndRender(tool) {{
+      runTool(tool.name, tool.args).then(res => {{
+        if (res && res.success && res.type === 'image' && res.data_url) {{
+          appendImage(res.data_url);
+        }} else {{
+          appendLine('assistant', 'Image tool failed: ' + (res && res.error ? res.error : 'unknown error'));
+        }}
+      }}).catch(err => appendLine('assistant', 'Tool error: ' + err));
+      return true;
+    }}
+  }}
+
+  async function runTool(name, args) {{
+    const url = (function() {{
+      try {{
+        const base = new URL('{proxy_url}', window.location.origin);
+        if (window.location.protocol === 'https:' && base.protocol !== 'https:') base.protocol = 'https:';
+        return base.toString().replace(/\/$/, '') + '/tool';
+      }} catch {{
+        return (window.location.protocol === 'https:' ? 'https://' : 'http://') + 'localhost:8787/tool';
+      }}
+    }})();
+    const resp = await fetch(url, {{
+      method: 'POST', headers: {{'Content-Type':'application/json'}},
+      body: JSON.stringify({{name, args}})
+    }});
+    return resp.json();
+  }}
+
+  function appendImage(dataUrl) {{
+    const wrap = document.createElement('div');
+    wrap.className = 'msg a';
+    const label = document.createElement('span');
+    label.className = 'role';
+    label.textContent = 'Alita';
+    wrap.appendChild(label);
+    const img = document.createElement('img');
+    img.src = dataUrl; img.alt = 'generated image';
+    img.style.maxWidth = '100%'; img.style.borderRadius = '10px'; img.style.border = '1px solid var(--border)'; img.style.display='block';
+    wrap.appendChild(img);
+    transcriptEl.appendChild(wrap);
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  }}
+
   async function start() {{
     startBtn.disabled = true; stopBtn.disabled = false; statusEl.textContent = 'Starting…';
     try {{
@@ -502,12 +696,22 @@ def handle_live_assistant():
       dc = pc.createDataChannel('oai-events');
       dc.onopen = () => {{
         logRaw('data channel open', 'info');
-        try {{ dc.send(JSON.stringify({{type:'response.create', response:{{instructions:'You are Alita, a helpful live voice assistant.'}}}})); }} catch(e){{}}
+        try {{
+          dc.send(JSON.stringify({{
+            type:'response.create',
+            response:{{
+              instructions:'You are Alita, a helpful live voice assistant. When the user asks to create an image, emit a tool request message with tool.name = "image.generate" and tool.args.prompt describing the image.',
+            }}
+          }}));
+        }} catch(e){{}}
       }};
       dc.onmessage = (evt) => {{
+        // Attempt tool handling first
+        if (tryHandleTool(evt.data)) return;
         try {{
           const msg = JSON.parse(evt.data);
           logRaw(msg, 'dc.onmessage');
+          if (tryHandleTool(msg)) return;
           const text = extractTextFromEvent(msg);
           if (text) appendLine('assistant', text);
         }} catch (e) {{
@@ -517,9 +721,11 @@ def handle_live_assistant():
       pc.ondatachannel = (evt) => {{
         const ch = evt.channel;
         ch.onmessage = (e) => {{
+          if (tryHandleTool(e.data)) return;
           try {{
             const j = JSON.parse(e.data);
             logRaw(j, 'pc.ondatachannel');
+            if (tryHandleTool(j)) return;
             const t = extractTextFromEvent(j);
             if (t) appendLine('assistant', t);
           }} catch {{
