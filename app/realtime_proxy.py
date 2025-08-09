@@ -22,10 +22,12 @@ import io
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import requests
+from typing import Any
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_REALTIME_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview-2024-12-17")
 OPENAI_REALTIME_URL = f"https://api.openai.com/v1/realtime?model={OPENAI_REALTIME_MODEL}"
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 app = FastAPI(title="AlitaOS Realtime Proxy")
 
@@ -123,6 +125,110 @@ async def tool_exec(payload: ToolPayload):
                 "type": "image",
                 "mime": "image/png",
                 "data_url": f"data:image/png;base64,{b64}",
+            })
+        except Exception as e:
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+    if name == "search.web":
+        # query (required), provider optional, max_results optional
+        query = (args.get("query") or args.get("q") or "").strip()
+        provider = (args.get("provider") or "").lower().strip() or ("tavily" if TAVILY_API_KEY else "duckduckgo")
+        max_results = int(args.get("max_results", 6))
+        if not query:
+            return JSONResponse({"success": False, "error": "query required"}, status_code=400)
+        try:
+            results: list[dict[str, Any]] = []
+            if provider == "tavily":
+                if not TAVILY_API_KEY:
+                    # Fallback to DDG if no key
+                    provider = "duckduckgo"
+                else:
+                    resp = requests.post(
+                        "https://api.tavily.com/search",
+                        json={
+                            "api_key": TAVILY_API_KEY,
+                            "query": query,
+                            "max_results": max_results,
+                            "include_answer": False,
+                        },
+                        timeout=30,
+                    )
+                    if resp.status_code != 200:
+                        return JSONResponse({"success": False, "error": f"Search error {resp.status_code}: {resp.text}"}, status_code=resp.status_code)
+                    data = resp.json()
+                    for item in data.get("results", [])[:max_results]:
+                        results.append({
+                            "title": item.get("title") or item.get("url"),
+                            "url": item.get("url"),
+                            "snippet": item.get("content") or item.get("snippet") or "",
+                            "score": item.get("score"),
+                            "source": "tavily",
+                        })
+
+            if provider == "duckduckgo":
+                # DuckDuckGo Instant Answer API (no key). Not full SERP; gives abstracts and related topics.
+                # https://api.duckduckgo.com/?q=...&format=json
+                def ddg_request():
+                    return requests.get(
+                        "https://api.duckduckgo.com/",
+                        params={"q": query, "format": "json", "no_html": 1, "skip_disambig": 1},
+                        timeout=20,
+                    )
+                resp = ddg_request()
+                if resp.status_code != 200:
+                    # Treat 202 (offline/test backends) as empty-success rather than loud error
+                    if resp.status_code == 202:
+                        data = {}
+                    else:
+                        # Retry once for transient network issues
+                        try:
+                            resp2 = ddg_request()
+                        except Exception:
+                            resp2 = None
+                        if resp2 is not None and resp2.status_code == 200:
+                            data = resp2.json()
+                        else:
+                            body = resp.text if isinstance(resp.text, str) else str(resp.text)
+                            body = (body[:500] + "…") if len(body) > 500 else body
+                            return JSONResponse(
+                                {"success": False, "error": f"provider=duckduckgo status={resp.status_code} body={body}"},
+                                status_code=resp.status_code,
+                            )
+                else:
+                    data = resp.json()
+                # Primary abstract
+                abstract_text = (data.get("AbstractText") or "").strip()
+                abstract_url = (data.get("AbstractURL") or "").strip() or (data.get("AbstractSource") or "")
+                if abstract_text and abstract_url:
+                    results.append({
+                        "title": data.get("Heading") or abstract_url,
+                        "url": abstract_url,
+                        "snippet": abstract_text,
+                        "source": "duckduckgo",
+                    })
+                # Related topics (flatten one level)
+                def iter_related(items):
+                    for it in items or []:
+                        if "FirstURL" in it:
+                            yield it
+                        for sub in it.get("Topics", []) or []:
+                            if "FirstURL" in sub:
+                                yield sub
+                for it in iter_related(data.get("RelatedTopics")):
+                    results.append({
+                        "title": it.get("Text") or it.get("FirstURL"),
+                        "url": it.get("FirstURL"),
+                        "snippet": it.get("Text") or "",
+                        "source": "duckduckgo",
+                    })
+                results = results[:max_results]
+
+            return JSONResponse({
+                "success": True,
+                "type": "search",
+                "query": query,
+                "results": results,
+                "provider": provider,
             })
         except Exception as e:
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
