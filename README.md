@@ -1,6 +1,6 @@
 # AlitaOS — Your AI Live Assistant
 
-![Meet Alita](app/static/alita.jpg)
+![Meet Alita](app/static/alita.png)
 
 AlitaOS is a streamlined, voice‑first AI assistant built with Streamlit and the OpenAI API. It uses Realtime WebRTC for sub‑second, bi‑directional audio. Speak naturally and Alita speaks back. A live transcript and animated avatar complete the hands‑free experience.
 
@@ -71,14 +71,14 @@ app/
   alita_streamlit.py      # Streamlit UI
   realtime_proxy.py       # FastAPI SDP proxy for OpenAI Realtime
   static/
-    alita.jpg            # (optional) avatar image used in UI
+    alita.png            # (optional) avatar image used in UI
 tools/                    # image, search, stock, chart, python_file
 utils/                    # ai_models.py (OpenAI only)
 ```
 
 ## Avatar (Speaking Animation)
 
-- Place your avatar image at `app/static/alita.jpg` (JPEG recommended). The UI animates a glow around the avatar when Alita is speaking, driven by a WebAudio analyser on the incoming audio stream.
+- Place your avatar image at `app/static/alita.png` (PNG or JPEG). The UI animates a glow around the avatar when Alita is speaking, driven by a WebAudio analyser on the incoming audio stream.
 - If the file is missing, a placeholder is shown.
 
 ## Live Transcript
