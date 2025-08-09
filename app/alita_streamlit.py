@@ -743,7 +743,7 @@ def handle_live_assistant():
           if (obj === null || typeof obj !== 'object') return JSON.stringify(obj);
           if (Array.isArray(obj)) return '[' + obj.map(stableStringify).join(',') + ']';
           const keys = Object.keys(obj).sort();
-          return '{' + keys.map(k => JSON.stringify(k) + ':' + stableStringify(obj[k])).join(',') + '}';
+          return '{{' + keys.map(k => JSON.stringify(k) + ':' + stableStringify(obj[k])).join(',') + '}}';
         }}
         const key = tool.name + '|' + stableStringify(tool.args || {{}});
         const now = Date.now();
@@ -753,7 +753,7 @@ def handle_live_assistant():
         // Mark the current response_id (if any) as handled to avoid a second tool from the same turn
         const rid = getResponseId(window.__lastEvent || {{}}) || null;
         if (rid) handledByResp.set(rid, now);
-        appendLine('assistant', `Running tool: ${tool.name}...`);
+        appendLine('assistant', `Running tool: ${{tool.name}}...`);
       }} catch {{}}
       runTool(tool.name, tool.args).then(res => {{
         if (!res || !res.success) {{
