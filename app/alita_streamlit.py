@@ -73,9 +73,13 @@ st.markdown("""
   html, body, [data-testid="stAppViewContainer"] {
     background: var(--bg) !important; color: var(--text);
   }
+  /* Remove default Streamlit top padding */
+  .main > div:first-child {
+    padding-top: 0 !important;
+  }
   /* Simple centered title with charcoal underline */
   .main-header {
-    text-align: center; margin: 8px 0 24px 0; color: var(--charcoal);
+    text-align: center; margin: 0 0 24px 0; color: var(--charcoal);
   }
   .main-header h1 { font-weight: 700; letter-spacing: 0.2px; margin: 0; }
   .main-header .underline { width: 120px; height: 2px; background: var(--charcoal); margin: 10px auto 0 auto; border-radius: 2px; }
@@ -228,19 +232,17 @@ def display_header():
       <div class="underline"></div>
     </div>
     <div class="top-nav">
-      <a href="?tab=live">Live Assistant</a>
+      <span>Live Assistant</span>
       <span>•</span>
-      <a href="?tab=chat">Chat</a>
+      <span>Chat</span>
       <span>•</span>
-      <a href="?tab=images">Images</a>
+      <span>Images</span>
       <span>•</span>
-      <a href="?tab=search">Search</a>
+      <span>Search</span>
       <span>•</span>
-      <a href="?tab=stocks">Stocks</a>
+      <span>Reports</span>
       <span>•</span>
-      <a href="?tab=charts">Charts</a>
-      <span>•</span>
-      <a href="?tab=python">Python</a>
+      <span>Coding</span>
     </div>
     """, unsafe_allow_html=True)
 
