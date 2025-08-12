@@ -26,6 +26,7 @@ from typing import Any
 import re
 import logging
 from dotenv import load_dotenv, find_dotenv
+from datetime import datetime
 
 
 # Load environment from nearest .env (project root) before reading keys
@@ -226,6 +227,142 @@ async def tool_exec(payload: ToolPayload):
                 "data_url": f"data:image/png;base64,{b64}",
             })
         except Exception as e:
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+    if name == "file.save":
+        # Save textual or tabular content to various formats
+        try:
+            base_dir = os.path.join(os.path.dirname(__file__), "..", "scratchpad", "saved")
+            base_dir = os.path.abspath(base_dir)
+            os.makedirs(base_dir, exist_ok=True)
+
+            filename = (args.get("filename") or args.get("name") or "").strip() if args else ""
+            fmt = (args.get("format") or args.get("type") or "").strip().lower() if args else ""
+            content = args.get("content") if args else None
+            rows = args.get("rows") if args else None  # list[dict]
+
+            # Infer format from filename extension if needed
+            if not fmt and filename:
+                _, ext = os.path.splitext(filename)
+                fmt = ext.lstrip(".").lower()
+
+            # Normalize common aliases
+            alias = {
+                "doc": "docx",
+                "ppt": "pptx",
+                "xls": "xlsx",
+                "markdown": "md",
+                "text": "txt",
+            }
+            fmt = alias.get(fmt, fmt)
+
+            if not fmt:
+                return JSONResponse({"success": False, "error": "format required"}, status_code=400)
+
+            # Default filename with date-stamp
+            if not filename:
+                stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                filename = f"alita_output-{stamp}.{fmt or 'txt'}"
+            # Ensure extension matches fmt
+            root, ext = os.path.splitext(filename)
+            if ext.lstrip(".").lower() != fmt:
+                filename = f"{root}.{fmt}"
+
+            # Safety: sanitize filename
+            safe = re.sub(r"[^A-Za-z0-9._\- ]+", "_", filename).strip()
+            file_path = os.path.join(base_dir, safe)
+
+            # Handlers per format
+            if fmt in ("txt", "md", "json", "py"):
+                data = content
+                if data is None and rows is not None:
+                    import json as _json
+                    data = _json.dumps(rows, indent=2)
+                if data is None:
+                    data = ""
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(str(data))
+                return JSONResponse({"success": True, "type": "file", "path": file_path, "filename": safe, "format": fmt})
+
+            if fmt == "pdf":
+                from reportlab.lib.pagesizes import letter
+                from reportlab.pdfgen import canvas
+                text = str(content or "")
+                c = canvas.Canvas(file_path, pagesize=letter)
+                width, height = letter
+                # simple text wrap
+                y = height - 72
+                for line in text.splitlines() or [""]:
+                    c.drawString(72, y, line[:95])
+                    y -= 14
+                    if y < 72:
+                        c.showPage()
+                        y = height - 72
+                c.save()
+                return JSONResponse({"success": True, "type": "file", "path": file_path, "filename": safe, "format": fmt})
+
+            if fmt == "docx":
+                from docx import Document
+                doc = Document()
+                text = str(content or "")
+                for para in (text.split("\n\n") if text else [""]):
+                    doc.add_paragraph(para)
+                doc.save(file_path)
+                return JSONResponse({"success": True, "type": "file", "path": file_path, "filename": safe, "format": fmt})
+
+            if fmt == "csv":
+                import csv
+                # rows expected as list of dicts; fallback: write content as single column
+                if isinstance(rows, list) and rows:
+                    fieldnames = sorted({k for r in rows if isinstance(r, dict) for k in r.keys()})
+                    with open(file_path, "w", newline="", encoding="utf-8") as f:
+                        w = csv.DictWriter(f, fieldnames=fieldnames)
+                        w.writeheader()
+                        for r in rows:
+                            if isinstance(r, dict):
+                                w.writerow({k: r.get(k) for k in fieldnames})
+                else:
+                    with open(file_path, "w", newline="", encoding="utf-8") as f:
+                        w = csv.writer(f)
+                        for line in str(content or "").splitlines():
+                            w.writerow([line])
+                return JSONResponse({"success": True, "type": "file", "path": file_path, "filename": safe, "format": fmt})
+
+            if fmt == "xlsx":
+                import pandas as pd
+                if isinstance(rows, list) and rows:
+                    df = pd.DataFrame(rows)
+                else:
+                    # store as single-column sheet
+                    df = pd.DataFrame({"content": str(content or "").splitlines()})
+                df.to_excel(file_path, index=False)
+                return JSONResponse({"success": True, "type": "file", "path": file_path, "filename": safe, "format": fmt})
+
+            if fmt == "pptx":
+                from pptx import Presentation
+                from pptx.util import Inches, Pt
+                prs = Presentation()
+                # Title + content slide
+                layout = prs.slide_layouts[1]
+                slide = prs.slides.add_slide(layout)
+                slide.shapes.title.text = args.get("title") or "Alita Export"
+                body = slide.placeholders[1]
+                text = str(content or "")
+                tf = body.text_frame
+                tf.clear()
+                first = True
+                for line in text.splitlines() or [""]:
+                    if first:
+                        tf.text = line
+                        first = False
+                    else:
+                        p = tf.add_paragraph(); p.text = line; p.level = 0
+                prs.save(file_path)
+                return JSONResponse({"success": True, "type": "file", "path": file_path, "filename": safe, "format": fmt})
+
+            return JSONResponse({"success": False, "error": f"unsupported format: {fmt}"}, status_code=400)
+        except Exception as e:
+            log.exception("/tool file.save: exception: %s", e)
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
     if name == "search.web":

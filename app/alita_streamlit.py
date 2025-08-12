@@ -363,7 +363,7 @@ def handle_live_assistant():
   #avatar {{ width:84px; height:84px; border-radius:50%; object-fit:cover; box-shadow:0 0 0px rgba(111,125,255,0.0); transition: box-shadow 160ms ease; border:2px solid var(--border); background:#ddd; display:block; flex:0 0 auto; }}
   #avatar.speaking {{ box-shadow:0 0 22px rgba(111,125,255,0.55); }}
   #alita-wrap {{ display:flex; align-items:center; justify-content:center; gap:18px; margin: 0 auto 14px; width: fit-content; max-width: 100%; box-sizing:border-box; position: static; left: auto; transform: none; overflow: visible; margin-left: 120px; }}
-  #controls {{ display:flex; align-items:center; justify-content:center; gap:16px; }}
+  #controls {{ display:flex; align-items:center; justify-content:center; gap:12px; flex-wrap: wrap; }}
   #controls button {{
     -webkit-appearance:none; appearance:none; border:1px solid #1f232b !important; padding:10px 20px; border-radius:12px; font-weight:600; cursor:pointer;
     color:#fff !important; background:#2b2f36 !important; min-width: 110px; font-size:14px; box-shadow:none !important;
@@ -413,6 +413,20 @@ def handle_live_assistant():
     <pre id=rawlog style="background:var(--panel-2); border:1px solid var(--border); border-radius:10px; padding:8px; max-height:clamp(160px, 24vh, 360px); overflow:auto; color:var(--text);"></pre>
   </details>
   <audio id=remoteAudio autoplay playsinline></audio>
+  <!-- Save reply toolbar below main container -->
+  <div id=savebar style="display:flex;align-items:center;justify-content:center;gap:12px;margin-top:10px;">
+    <label for=savereplyfmt style="font-size:13px;color:var(--muted);">Save reply</label>
+    <select id=savereplyfmt title="Save last assistant reply format" style="padding:6px 10px;border-radius:10px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);">
+      <option value="md">MD</option>
+      <option value="pdf">PDF</option>
+      <option value="docx">DOCX</option>
+      <option value="txt">TXT</option>
+      <option value="json">JSON</option>
+      <option value="pptx">PPTX</option>
+    </select>
+    <input id=savereplyfn type=text placeholder="assistant-reply.ext" style="padding:6px 8px;border-radius:10px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);min-width:220px;" />
+    <button id=savereplybtn>Save reply</button>
+  </div>
   </div>
 </div>
 <script>
@@ -424,6 +438,17 @@ def handle_live_assistant():
     const avatarEl = document.getElementById('avatar');
     const providerSel = document.getElementById('provider');
     try {{ if (providerSel) providerSel.value = '{provider_default}'; }} catch {{}}
+    const saveReplyFmt = document.getElementById('savereplyfmt');
+    const saveReplyFn = document.getElementById('savereplyfn');
+    const saveReplyBtn = document.getElementById('savereplybtn');
+    try {{
+      if (saveReplyFn) {{
+        const dt = new Date();
+        const pad = (n) => String(n).padStart(2,'0');
+        const stamp = `${{dt.getFullYear()}}${{pad(dt.getMonth()+1)}}${{pad(dt.getDate())}}-${{pad(dt.getHours())}}${{pad(dt.getMinutes())}}`;
+        saveReplyFn.value = `assistant-reply-${{stamp}}.md`;
+      }}
+    }} catch {{}}
     let pc, micStream;
     let dc; // data channel
     let analyser, audioCtx, raf;
@@ -487,6 +512,7 @@ def handle_live_assistant():
     if (!text) return;
     if (lastDiv && lastRole === role) {{
       lastDiv.textContent += text;
+      try {{ if (role === 'assistant') {{ if (!window.__lastAssistantText) window.__lastAssistantText = ''; window.__lastAssistantText += text; }} }} catch {{}}
     }} else {{
       const div = document.createElement('div');
       div.className = 'msg ' + (role === 'assistant' ? 'a' : 'u');
@@ -500,6 +526,7 @@ def handle_live_assistant():
       transcriptEl.appendChild(div);
       lastDiv = span;
       lastRole = role;
+      try {{ if (role === 'assistant') window.__lastAssistantText = text; }} catch {{}}
     }}
     transcriptEl.scrollTop = transcriptEl.scrollHeight;
   }}
@@ -658,6 +685,14 @@ def handle_live_assistant():
           const style = a.style || a.image_style || null;
           if (prompt) return {{ name: 'image.generate', args: {{ prompt, size, ...(style ? {{style}} : {{}}) }} }};
         }}
+        if (obj.function === 'save_file' || obj.function === 'file_save') {{
+          const a = obj.arguments || {{}};
+          const filename = a.filename || a.name || '';
+          const format = a.format || a.type || '';
+          const content = a.content || '';
+          const rows = a.rows || null;
+          if (format && (content || rows)) return {{ name: 'file.save', args: {{ filename, format, content, ...(rows ? {{rows}} : {{}}) }} }};
+        }}
       }}
       // Heuristic: plain JSON with description/prompt
       if (typeof obj === 'object') {{
@@ -678,6 +713,10 @@ def handle_live_assistant():
         if (obj.query && typeof obj.query === 'string') {{
           const provider = obj.provider || null;
           return {{ name: 'search.web', args: {{ query: obj.query, max_results: obj.max_results || 6, ...(provider ? {{provider}} : {{}}) }} }};
+        }}
+        // Heuristic: file save payload
+        if ((obj.filename || obj.name) && (obj.format || obj.type) && (typeof obj.content === 'string' || Array.isArray(obj.rows))) {{
+          return {{ name: 'file.save', args: {{ filename: obj.filename || obj.name, format: obj.format || obj.type, content: obj.content || '', ...(obj.rows ? {{rows: obj.rows}} : {{}}) }} }};
         }}
         // Heuristic: prompt-only object implies image request
         if (typeof obj.prompt === 'string' && !obj.query) {{
@@ -844,6 +883,10 @@ def handle_live_assistant():
           try {{ requestSpokenAnswer(res); }} catch {{}}
           return;
         }}
+        if (res.type === 'file') {{
+          appendFile(res);
+          return;
+        }}
         appendLine('assistant', 'Tool returned unsupported type.');
       }}).catch(err => appendLine('assistant', 'Tool error: ' + err))
         .finally(() => {{ try {{ window.__inFlightTools.delete(key); }} catch {{}} }});
@@ -879,6 +922,31 @@ def handle_live_assistant():
       body: JSON.stringify({{name, args}})
     }});
     return resp.json();
+  }}
+
+  function appendFile(res) {{
+    const wrap = document.createElement('div');
+    wrap.className = 'msg a';
+    const label = document.createElement('span');
+    label.className = 'role';
+    label.textContent = 'Alita';
+    wrap.appendChild(label);
+    const box = document.createElement('div');
+    box.style.border = '1px solid var(--border)';
+    box.style.borderRadius = '10px';
+    box.style.padding = '10px';
+    box.style.background = 'var(--panel-2)';
+    const title = document.createElement('div');
+    title.style.fontWeight = '600';
+    title.textContent = 'File saved';
+    const p = document.createElement('div');
+    p.style.marginTop = '6px';
+    p.textContent = (res.filename || 'file') + (res.format ? (' (' + res.format + ')') : '') + (res.path ? (' → ' + res.path) : '');
+    box.appendChild(title);
+    box.appendChild(p);
+    wrap.appendChild(box);
+    transcriptEl.appendChild(wrap);
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
   }}
 
   function appendImage(dataUrl) {{
@@ -930,6 +998,94 @@ def handle_live_assistant():
       list.appendChild(item);
     }});
     wrap.appendChild(list);
+
+    // Save controls for search results
+    const ctrl = document.createElement('div');
+    ctrl.style.display = 'flex';
+    ctrl.style.alignItems = 'center';
+    ctrl.style.gap = '8px';
+    ctrl.style.marginTop = '10px';
+    const fmt = document.createElement('select');
+    fmt.title = 'Save format';
+    ;['md','pdf','docx','csv','xlsx','txt','json','pptx'].forEach(function(opt) {{
+      const o = document.createElement('option'); o.value = opt; o.textContent = opt.toUpperCase(); fmt.appendChild(o);
+    }});
+    const fn = document.createElement('input');
+    fn.type = 'text'; fn.placeholder = 'filename.ext';
+    fn.style.flex = '1 1 auto';
+    try {{
+      const q = (res.query || 'alita').toString().toLowerCase();
+      const slug = q.replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,50) || 'alita';
+      const dt = new Date();
+      const pad = (n) => String(n).padStart(2,'0');
+      const stamp = `${{dt.getFullYear()}}${{pad(dt.getMonth()+1)}}${{pad(dt.getDate())}}-${{pad(dt.getHours())}}${{pad(dt.getMinutes())}}`;
+      fn.value = `${{slug}}-${{stamp}}.md`;
+    }} catch {{ fn.value = 'alita.md'; }}
+    const topN = document.createElement('select');
+    topN.title = 'Top N results';
+    ;[1,2,3,4,5,6,7,8,9,10].forEach(function(n) {{ const o=document.createElement('option'); o.value=String(n); o.textContent='Top '+n; topN.appendChild(o); }});
+    try {{ topN.value = String(Math.min(3, (res.results || []).length || 3)); }} catch {{ topN.value = '3'; }}
+
+    const saveBtn = document.createElement('button');
+    saveBtn.textContent = 'Save results';
+    saveBtn.style.padding = '8px 12px';
+    saveBtn.onclick = () => {{
+      const format = (fmt.value || '').toLowerCase();
+      let filename = (fn.value || '').trim();
+      if (!filename) filename = 'alita.' + (format || 'md');
+      try {{
+        const m = filename.match(/\.(\w+)$/); const ext = m ? m[1].toLowerCase() : '';
+        if (ext !== format) filename = filename.replace(/\.(\w+)$/, '') + '.' + format;
+      }} catch {{}}
+      const args = {{ filename, format }};
+      const n = parseInt(topN.value || '3', 10);
+      if (format === 'csv' || format === 'xlsx' || format === 'json') {{
+        const rows = (res.results || []).slice(0, n).map(r => ({{
+          title: r.title || '', url: r.url || '', snippet: (r.snippet || '').slice(0, 200), source: r.source || ''
+        }}));
+        args.rows = rows;
+      }} else {{
+        let text = '# Results for: ' + (res.query || '') + '\n\n';
+        (res.results || []).slice(0, n).forEach((r, i) => {{
+          text += `${{i+1}}. ${{r.title || r.url || ''}}\n${{r.url || ''}}\n${{(r.snippet || '').slice(0,400)}}\n\n`;
+        }});
+        args.content = text;
+      }}
+      try {{ logRaw('runTool file.save ' + JSON.stringify(args), 'tool'); }} catch {{}}
+      runTool('file.save', args).then(res2 => {{
+        if (res2 && res2.success && res2.type === 'file') return appendFile(res2);
+        appendLine('assistant', (res2 && res2.error) ? ('Save error: ' + res2.error) : 'Save error');
+      }}).catch(err => appendLine('assistant', 'Save error: ' + err));
+    }};
+    ctrl.appendChild(fmt);
+    ctrl.appendChild(fn);
+    ctrl.appendChild(topN);
+    ctrl.appendChild(saveBtn);
+    const saveSumBtn = document.createElement('button');
+    saveSumBtn.textContent = 'Save summary';
+    saveSumBtn.style.padding = '8px 12px';
+    saveSumBtn.onclick = () => {{
+      const format = (fmt.value || 'md').toLowerCase();
+      let filename = (fn.value || '').trim();
+      if (!filename) filename = 'alita.' + format;
+      try {{ const m = filename.match(/\.(\w+)$/); const ext = m ? m[1].toLowerCase() : ''; if (ext !== format) filename = filename.replace(/\.(\w+)$/, '') + '.' + format; }} catch {{}}
+      const n = parseInt(topN.value || '3', 10);
+      const args = {{ filename, format }};
+      const items = (res.results || []).slice(0, n);
+      let summary = 'Summary for: ' + (res.query || '') + '\n\n';
+      items.forEach((r, i) => {{ summary += `- (${{i+1}}) ${{r.title || r.url || ''}} — ${{(r.snippet || '').slice(0,200)}}\n`; }});
+      if (format === 'csv' || format === 'xlsx' || format === 'json') {{
+        args.rows = items.map((r, i) => ({{ rank: i+1, title: r.title || '', url: r.url || '', summary: (r.snippet || '').slice(0,200) }}));
+      }} else {{ args.content = summary; }}
+      try {{ logRaw('runTool file.save (summary) ' + JSON.stringify(args), 'tool'); }} catch {{}}
+      runTool('file.save', args).then(res2 => {{
+        if (res2 && res2.success && res2.type === 'file') return appendFile(res2);
+        appendLine('assistant', (res2 && res2.error) ? ('Save error: ' + res2.error) : 'Save error');
+      }}).catch(err => appendLine('assistant', 'Save error: ' + err));
+    }};
+    ctrl.appendChild(saveSumBtn);
+    wrap.appendChild(ctrl);
+
     transcriptEl.appendChild(wrap);
     transcriptEl.scrollTop = transcriptEl.scrollHeight;
   }}
@@ -1090,12 +1246,12 @@ def handle_live_assistant():
           }}));
         }} catch(e){{}}
         try {{
-          // Strengthen system prompt so the assistant uses search and image tools
+          // Strengthen system prompt so the assistant uses search, image, and file-save tools
           dc.send(JSON.stringify({{
             type:'session.update',
             session:{{
               tool_choice: 'auto',
-              instructions: 'You are Alita, a helpful live voice assistant running inside AlitaOS. You CAN and SHOULD use web search for any query that is time-sensitive or requires current information. Emit either search("<concise query>") or a JSON object {{"query":"...","provider":"tavily|duckduckgo","max_results":6}} as text output so the UI can run the tool. Do this for: latest news on X, current price of Y, current time in Z, weather in Z today, sports scores, CEO/current leadership now, market open status today, etc. Do not say you cannot provide real-time information; instead, output the JSON payload and wait for results. When the user asks for an image, emit a JSON object with {{"prompt":"...","size":"small|medium|large" (or pixel size), "style":"<optional>"}}. Keep spoken summaries concise and cite sources by domain in speech after search results are shown.'
+              instructions: 'You are Alita, a helpful live voice assistant running inside AlitaOS. You CAN and SHOULD use web search for any query that is time-sensitive or requires current information. Emit either search("<concise query>") or a JSON object {{"query":"...","provider":"tavily|duckduckgo","max_results":6}} as text output so the UI can run the tool. Do this for: latest news on X, current price of Y, current time in Z, weather in Z today, sports scores, CEO/current leadership now, market open status today, etc. Do not say you cannot provide real-time information; instead, output the JSON payload and wait for results. To save content to a file, emit a JSON object with {{"filename":"<name>","format":"pdf|md|docx|csv|xlsx|pptx|py|txt|json","content":"<text>"}} (or include "rows": [{{...}}] for tables). Keep spoken summaries concise and cite sources by domain in speech after search results are shown.'
             }}
           }}));
         }} catch(e){{}}
@@ -1212,6 +1368,21 @@ def handle_live_assistant():
   }}
 
   startBtn.onclick = start; stopBtn.onclick = stop;
+  try {{
+    if (saveReplyBtn) saveReplyBtn.onclick = () => {{
+      try {{ if (!window.__lastAssistantText || !window.__lastAssistantText.trim()) {{ appendLine('assistant', 'Nothing to save yet.'); return; }} }} catch {{ return; }}
+      const fmt = (saveReplyFmt && saveReplyFmt.value) ? saveReplyFmt.value.toLowerCase() : 'md';
+      let fnv = (saveReplyFn && saveReplyFn.value) ? saveReplyFn.value.trim() : '';
+      if (!fnv) fnv = 'assistant-reply.' + fmt;
+      try {{ const m = fnv.match(/\.(\w+)$/); const ext = m ? m[1].toLowerCase() : ''; if (ext !== fmt) fnv = fnv.replace(/\.(\w+)$/, '') + '.' + fmt; }} catch {{}}
+      const args = {{ filename: fnv, format: fmt, content: String(window.__lastAssistantText || '') }};
+      try {{ logRaw('runTool file.save (reply) ' + JSON.stringify(args), 'tool'); }} catch {{}}
+      runTool('file.save', args).then(res2 => {{
+        if (res2 && res2.success && res2.type === 'file') return appendFile(res2);
+        appendLine('assistant', (res2 && res2.error) ? ('Save error: ' + res2.error) : 'Save error');
+      }}).catch(err => appendLine('assistant', 'Save error: ' + err));
+    }}
+  }} catch {{}}
 </script>
         """,
         height=650,
