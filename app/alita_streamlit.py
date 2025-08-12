@@ -93,7 +93,7 @@ st.markdown("""
   [data-testid="stSidebar"], [data-testid="stSidebarNav"] { display: none !important; }
   /* Centered main container with max width */
   [data-testid="stAppViewContainer"] > .main {
-    max-width: 1200px;
+    max-width: 1300px;
     margin-left: auto; margin-right: auto;
     padding-left: 1rem; padding-right: 1rem;
   }
@@ -356,13 +356,13 @@ def handle_live_assistant():
   html, body {{ margin:0; padding:0; overflow: visible; }}
   #outer {{ width:100%; display:block; text-align:center; }}
   #container {{
-    margin: 0 auto !important; width: 100%; max-width: 960px; background: var(--panel); padding: 20px 24px; border-radius: 12px; border:1px solid var(--border);
+    margin: 0 auto !important; width: 100%; max-width: 1060px; background: var(--panel); padding: 20px 24px; border-radius: 12px; border:1px solid var(--border);
     display: inline-block; text-align: initial; overflow: visible; box-sizing: border-box;
   }}
   #alita-wrap {{ display:flex; align-items:center; gap:16px; margin-bottom:14px; }}
   #avatar {{ width:84px; height:84px; border-radius:50%; object-fit:cover; box-shadow:0 0 0px rgba(111,125,255,0.0); transition: box-shadow 160ms ease; border:2px solid var(--border); background:#ddd; display:block; flex:0 0 auto; }}
   #avatar.speaking {{ box-shadow:0 0 22px rgba(111,125,255,0.55); }}
-  #alita-wrap {{ display:flex; align-items:center; justify-content:center; gap:18px; margin: 0 auto 14px; width: fit-content; max-width: 100%; box-sizing:border-box; position: static; left: auto; transform: none; overflow: visible; margin-left: 100px; }}
+  #alita-wrap {{ display:flex; align-items:center; justify-content:center; gap:18px; margin: 0 auto 14px; width: fit-content; max-width: 100%; box-sizing:border-box; position: static; left: auto; transform: none; overflow: visible; margin-left: 120px; }}
   #controls {{ display:flex; align-items:center; justify-content:center; gap:16px; }}
   #controls button {{
     -webkit-appearance:none; appearance:none; border:1px solid #1f232b !important; padding:10px 20px; border-radius:12px; font-weight:600; cursor:pointer;
@@ -1214,8 +1214,8 @@ def handle_live_assistant():
   startBtn.onclick = start; stopBtn.onclick = stop;
 </script>
         """,
-        height=520,
-        width=960,
+        height=650,
+        width=1060,
     )
 
 def handle_image_generation():
