@@ -47,8 +47,12 @@ except ImportError as e:
 from streamlit.components.v1 import html as st_html
 
 # Load environment variables
-from dotenv import load_dotenv
-load_dotenv()
+from dotenv import load_dotenv, find_dotenv
+try:
+    load_dotenv(find_dotenv())
+except Exception:
+    # Fallback to local directory if find_dotenv fails
+    load_dotenv()
 
 # Page configuration
 st.set_page_config(
@@ -208,7 +212,7 @@ def display_header():
           margin: 0 auto !important;
           padding-left: 0 !important;
           padding-right: 0 !important;
-        }}
+        }
         [data-testid="stAppViewContainer"] > .main {
           display: flex;
           justify-content: center;
@@ -337,6 +341,9 @@ def handle_live_assistant():
         except Exception:
             continue
 
+    # Decide default search provider based on env (Tavily if key present)
+    provider_default = "tavily" if os.getenv("TAVILY_API_KEY") else "auto"
+
     # Provide Start/Stop UI with transcript and animated avatar (centered via Streamlit columns)
     left_col, mid_col, right_col = st.columns([1, 8, 1], gap="small")
     with mid_col:
@@ -391,6 +398,12 @@ def handle_live_assistant():
     <div id=controls>
       <button id=start>Start</button>
       <button id=stop disabled>Stop</button>
+      <label for=provider style="margin-left:12px;font-size:13px;color:var(--muted);">Provider</label>
+      <select id=provider title="Web search provider" style="padding:6px 10px;border-radius:10px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);">
+        <option value="auto">Auto</option>
+        <option value="tavily">Tavily</option>
+        <option value="duckduckgo">DuckDuckGo</option>
+      </select>
       <span id=status>Idle</span>
     </div>
   </div>
@@ -409,6 +422,8 @@ def handle_live_assistant():
     const remoteAudio = document.getElementById('remoteAudio');
     const transcriptEl = document.getElementById('transcript');
     const avatarEl = document.getElementById('avatar');
+    const providerSel = document.getElementById('provider');
+    try {{ if (providerSel) providerSel.value = '{provider_default}'; }} catch {{}}
     let pc, micStream;
     let dc; // data channel
     let analyser, audioCtx, raf;
@@ -493,6 +508,7 @@ def handle_live_assistant():
   function tryHandleTool(data) {{
     // Deduplication store for recent tool invocations (name+args) within a short window
     if (!window.__recentTools) window.__recentTools = new Map();
+    if (!window.__inFlightTools) window.__inFlightTools = new Set();
     // Track handled response_ids to avoid multiple tools per assistant turn
     if (!window.__handledResponseIds) window.__handledResponseIds = new Map();
     const recentTools = window.__recentTools;
@@ -518,6 +534,27 @@ def handle_live_assistant():
       if (m && m[1]) {{
         return runAndRender({{ name: 'search.web', args: {{ query: m[1].trim(), max_results: 6 }} }});
       }}
+      // direct time intent patterns (trigger web search tool which has time resolver)
+      const t = txt.match(/\b(?:what\s+time\s+is\s+it\s+in|current\s+time\s+in|local\s+time\s+in|time\s+in)\s+([A-Za-z ,\-]+)\b/i);
+      if (t && t[1]) {{
+        return runAndRender({{ name: 'search.web', args: {{ query: ('current time in ' + t[1]).trim(), max_results: 3 }} }});
+      }}
+      // JSON search payload in a text string, e.g. {{"query":"..."}}
+      try {{
+        if (/\\{{/.test(txt) && /\"query\"\s*:/.test(txt)) {{
+          let j = JSON.parse(txt);
+          const tool = normalizeTool(j, txt);
+          if (tool) return runAndRender(tool);
+        }}
+      }} catch {{}}
+      // Generic current-info heuristic: if the assistant text suggests current/real-time info topics, trigger a web search
+      try {{
+        const hasCurrent = /\b(latest|current|today|breaking|now|as of now|recent)\b/i.test(txt);
+        const hasTopic = /\b(news|price|prices|time|weather|status|score|scores|update|updates|market)\b/i.test(txt);
+        if (hasCurrent && hasTopic) {{
+          return runAndRender({{ name: 'search.web', args: {{ query: txt.slice(0, 200), max_results: 6 }} }});
+        }}
+      }} catch {{}}
       // "generate an image of ..." heuristic
       const im = txt.match(/\b(?:generate\s+(?:an\s+)?image\s+of|image\s+of)\s+([^\.\n]+)(?:[\.|\n]|$)/i);
       if (im && im[1]) {{
@@ -682,22 +719,50 @@ def handle_live_assistant():
         if (data && typeof data.timezone === 'string') return true;
         // Detect from completed events only (avoid duplicate triggers on deltas)
         if (data && typeof data.type === 'string') {{
+          // Mark this event as the last one so runAndRender can tag this response_id as handled
+          try {{ window.__lastEvent = data; }} catch {{}}
+          try {{ console.debug('[alita][tool] event type:', data.type, 'response_id:', getResponseId(data)); }} catch {{}}
           const rid = getResponseId(data);
           if (rid && handledByResp.has(rid)) return true;
           if (data.type === 'response.text.done' && typeof data.text === 'string') {{
-            if (detectAndRunFromText(data.text)) return true;
+            try {{ console.debug('[alita][tool] text.done:', data.text); }} catch {{}}
+            if (detectAndRunFromText(data.text)) {{ try {{ console.debug('[alita][tool] detectAndRunFromText returned true (text.done)'); }} catch {{}}; return true; }}
+            // Fallback: parse JSON text directly for tool payloads
+            try {{
+              if (/\"query\"\s*:/.test(data.text)) {{
+                try {{ console.debug('[alita][tool] attempting JSON.parse on text.done'); }} catch {{}}
+                let j = JSON.parse(data.text);
+                const tool = normalizeTool(j, data.text);
+                if (tool) {{ try {{ console.debug('[alita][tool] normalized tool from text.done:', tool); }} catch {{}}; return runAndRender(tool); }}
+              }}
+            }} catch {{}}
           }}
           if (data.type === 'response.audio_transcript.done' && typeof data.transcript === 'string') {{
-            if (detectAndRunFromText(data.transcript)) return true;
+            try {{ console.debug('[alita][tool] audio_transcript.done:', data.transcript); }} catch {{}}
+            if (detectAndRunFromText(data.transcript)) {{ try {{ console.debug('[alita][tool] detectAndRunFromText returned true (audio)'); }} catch {{}}; return true; }}
+            try {{
+              const t = data.transcript;
+              if (/\"query\"\s*:/.test(t) && /\\{{/.test(t)) {{
+                try {{ console.debug('[alita][tool] attempting JSON.parse on audio transcript'); }} catch {{}}
+                let j = JSON.parse(t);
+                const tool = normalizeTool(j, t);
+                if (tool) {{ try {{ console.debug('[alita][tool] normalized tool from audio transcript:', tool); }} catch {{}}; return runAndRender(tool); }}
+              }}
+            }} catch {{}}
           }}
+          const tool = normalizeTool(data);
+          if (tool) {{ try {{ console.debug('[alita][tool] normalized tool from direct object:', tool); }} catch {{}}; return runAndRender(tool); }}
         }}
-        const tool = normalizeTool(data);
-        if (tool) return runAndRender(tool);
       }}
     }} catch {{}}
 
     // Try string payloads: first detect textual tool intents, then extract JSON blocks
     if (typeof data === 'string') {{
+      // If this is a serialized Realtime event (e.g., {{"type":"response.text.done", ...}}), ignore here
+      try {{
+        const maybe = JSON.parse(data);
+        if (maybe && typeof maybe.type === 'string' && /^response\./.test(maybe.type)) return false;
+      }} catch {{}}
       if (detectAndRunFromText(data)) return true;
       // Heuristic: if the assistant says they'll "generate an image of ...", infer an image.generate
       // Code fence case ```json ... ```
@@ -747,27 +812,41 @@ def handle_live_assistant():
         }}
         const key = tool.name + '|' + stableStringify(tool.args || {{}});
         const now = Date.now();
-        // 8s dedupe window
-        if (recentTools.has(key) && now - recentTools.get(key) < 8000) return true;
+        // 12s dedupe window
+        if (recentTools.has(key) && now - recentTools.get(key) < 12000) {{ try {{ console.debug('[alita][tool] skip: within dedupe window for key', key); }} catch {{}}; return true; }}
+        // Prevent re-entry while a same tool is currently in flight
+        if (window.__inFlightTools.has(key)) {{ try {{ console.debug('[alita][tool] skip: in-flight key', key); }} catch {{}}; return true; }}
         recentTools.set(key, now);
+        window.__inFlightTools.add(key);
+        try {{ console.debug('[alita][tool] Running tool:', tool.name, 'with args:', tool.args, 'key:', key); }} catch {{}}
+        try {{ logRaw('runTool ' + tool.name + ' ' + JSON.stringify(tool.args || {{}}), 'tool'); }} catch {{}}
+        // Immediately cancel any ongoing assistant response to avoid fallback speech overlap
+        try {{ cancelCurrentResponse(); }} catch {{}}
         // Mark the current response_id (if any) as handled to avoid a second tool from the same turn
         const rid = getResponseId(window.__lastEvent || {{}}) || null;
         if (rid) handledByResp.set(rid, now);
         appendLine('assistant', `Running tool: ${{tool.name}}...`);
       }} catch {{}}
       runTool(tool.name, tool.args).then(res => {{
+        try {{ logRaw('tool result ' + (res && res.type ? res.type : 'unknown'), 'tool'); }} catch {{}}
         if (!res || !res.success) {{
           appendLine('assistant', (res && res.error) ? ('Tool error: ' + res.error) : 'Tool error');
           return;
         }}
         if (res.type === 'image' && res.data_url) return appendImage(res.data_url);
+        if (res.type === 'time' && res.datetime_iso && res.tz) {{
+          appendTime(res);
+          try {{ cancelCurrentResponse(); requestSpokenTime(res); }} catch {{}}
+          return;
+        }}
         if (res.type === 'search' && Array.isArray(res.results)) {{
           appendSearch(res);
           try {{ requestSpokenAnswer(res); }} catch {{}}
           return;
         }}
         appendLine('assistant', 'Tool returned unsupported type.');
-      }}).catch(err => appendLine('assistant', 'Tool error: ' + err));
+      }}).catch(err => appendLine('assistant', 'Tool error: ' + err))
+        .finally(() => {{ try {{ window.__inFlightTools.delete(key); }} catch {{}} }});
       return true;
     }}
   }}
@@ -782,6 +861,19 @@ def handle_live_assistant():
         return (window.location.protocol === 'https:' ? 'https://' : 'http://') + 'localhost:8787/tool';
       }}
     }})();
+    // Normalize queries for web search to reduce duplicates and noise
+    try {{
+      if (name === 'search.web' && args && typeof args.query === 'string') {{
+        let q = args.query.trim();
+        q = q.replace(/\b(right now|please|kindly|today)\b/gi, '').replace(/\s{2,}/g, ' ').trim();
+        // Remove leading/trailing quotes/braces if the model emitted a JSON string as text
+        if ((q.startsWith('{') && q.endsWith('}')) || (q.startsWith('"') && q.endsWith('"'))) {{
+          try {{ const parsed = JSON.parse(q); if (parsed && typeof parsed.query === 'string') q = parsed.query; }} catch {{}}
+        }}
+        args.query = q;
+        try {{ if (providerSel && providerSel.value && providerSel.value !== 'auto') args.provider = providerSel.value; }} catch {{}}
+      }}
+    }} catch {{}}
     const resp = await fetch(url, {{
       method: 'POST', headers: {{'Content-Type':'application/json'}},
       body: JSON.stringify({{name, args}})
@@ -811,6 +903,10 @@ def handle_live_assistant():
     label.className = 'role';
     label.textContent = 'Alita';
     wrap.appendChild(label);
+    const meta = document.createElement('div');
+    meta.style.fontSize = '12px'; meta.style.color = 'var(--muted)'; meta.style.marginTop = '2px';
+    meta.textContent = 'Query: ' + (res.query || '') + (res.provider ? ('  |  Provider: ' + res.provider) : '');
+    wrap.appendChild(meta);
     const list = document.createElement('div');
     list.style.display = 'grid';
     list.style.gap = '8px';
@@ -857,9 +953,109 @@ def handle_live_assistant():
     }} catch (e) {{}}
   }}
 
+  function cancelCurrentResponse() {{
+    try {{
+      if (!dc || dc.readyState !== 'open') return;
+      if (!window.__activeResponseId) return;
+      dc.send(JSON.stringify({{ type: 'response.cancel' }}));
+    }} catch {{}}
+  }}
+
+  function appendTime(res) {{
+    const wrap = document.createElement('div');
+    wrap.className = 'msg a';
+    const label = document.createElement('span');
+    label.className = 'role';
+    label.textContent = 'Alita';
+    wrap.appendChild(label);
+    const box = document.createElement('div');
+    box.style.border = '1px solid var(--border)';
+    box.style.borderRadius = '10px';
+    box.style.padding = '10px';
+    box.style.background = 'var(--panel-2)';
+    const title = document.createElement('div');
+    title.style.fontWeight = '600';
+    const place = res.place || '';
+    const tz = res.tz || '';
+    let human = res.datetime_iso || '';
+    try {{
+      const dt = new Date(res.datetime_iso);
+      if (!isNaN(dt.getTime()) && tz) {{
+        const fmt = new Intl.DateTimeFormat(undefined, {{ dateStyle: 'medium', timeStyle: 'long', timeZone: tz }});
+        human = fmt.format(dt);
+      }}
+    }} catch {{}}
+    title.textContent = `Local time in ${{place}} (${{tz}})`;
+    const timeEl = document.createElement('div');
+    timeEl.style.marginTop = '6px';
+    timeEl.textContent = human + (res.utc_offset ? ` (UTC offset ${{res.utc_offset}})` : '');
+    box.appendChild(title);
+    box.appendChild(timeEl);
+    if (res.source_url) {{
+      const src = document.createElement('a');
+      src.href = res.source_url; src.target = '_blank'; src.rel = 'noreferrer noopener';
+      src.textContent = 'Source: worldtimeapi.org';
+      src.style.display = 'inline-block';
+      src.style.marginTop = '6px';
+      box.appendChild(src);
+    }}
+    wrap.appendChild(box);
+    transcriptEl.appendChild(wrap);
+    transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  }}
+
+  function requestSpokenTime(res) {{
+    try {{
+      if (!dc || dc.readyState !== 'open') return;
+      const place = res.place || '';
+      const tz = res.tz || '';
+      let human = res.datetime_iso || '';
+      try {{
+        const dt = new Date(res.datetime_iso);
+        if (!isNaN(dt.getTime()) && tz) {{
+          const fmt = new Intl.DateTimeFormat('en-US', {{ dateStyle: 'full', timeStyle: 'long', timeZone: tz }});
+          human = fmt.format(dt);
+        }}
+      }} catch {{}}
+      const instr = `Speak the current local time clearly. Say: It is ${{human}} in ${{place}} (${{tz}}).`;
+      const payload = {{ type: 'response.create', response: {{ instructions: instr }} }};
+      dc.send(JSON.stringify(payload));
+    }} catch {{}}
+  }}
+
   async function start() {{
     startBtn.disabled = true; stopBtn.disabled = false; statusEl.textContent = 'Starting…';
     try {{
+      // Preflight: check proxy /health before requesting mic
+      const configuredPre = '{proxy_url}';
+      function computeBase(urlStr) {{
+        try {{
+          const u = new URL(urlStr, window.location.origin);
+          if (window.location.protocol === 'https:' && u.protocol !== 'https:') u.protocol = 'https:';
+          return u.toString().replace(/\/$/, '');
+        }} catch {{
+          return (window.location.protocol === 'https:' ? 'https://' : 'http://') + 'localhost:8787';
+        }}
+      }}
+      async function tryHealth(base) {{
+        try {{ const r = await fetch(base + '/health', {{ method: 'GET' }}); return r && r.ok; }} catch {{ return false; }}
+      }}
+      let base = computeBase(configuredPre);
+      let ok = await tryHealth(base);
+      if (!ok) {{
+        try {{ const u2 = new URL(base); u2.protocol = (u2.protocol === 'https:') ? 'http:' : 'https:'; base = u2.toString(); }} catch {{}}
+        ok = await tryHealth(base.replace(/\/$/, ''));
+      }}
+      if (!ok) {{
+        try {{ const u3 = new URL(base); u3.hostname = (u3.hostname === 'localhost') ? '127.0.0.1' : 'localhost'; base = u3.toString(); }} catch {{}}
+        ok = await tryHealth(base.replace(/\/$/, ''));
+      }}
+      if (!ok) {{
+        statusEl.textContent = 'Proxy unavailable on /health (is it running on :8787?)';
+        logRaw('proxy health check failed for /health', 'error');
+        startBtn.disabled = false; stopBtn.disabled = true; return;
+      }}
+
       micStream = await navigator.mediaDevices.getUserMedia({{audio: true, video: false}});
       pc = new RTCPeerConnection({{iceServers: [{{urls: 'stun:stun.l.google.com:19302'}}]}});
       micStream.getAudioTracks().forEach(t => pc.addTrack(t, micStream));
@@ -899,7 +1095,7 @@ def handle_live_assistant():
             type:'session.update',
             session:{{
               tool_choice: 'auto',
-              instructions: 'You are Alita, a helpful live voice assistant running inside AlitaOS. You CAN use tools for web search and image generation. When the user asks for current or time-sensitive facts, call the web search tool: emit search("<concise query>") or a JSON object {{"query":"..."}}. When the user asks for an image, call the image tool by emitting a JSON object with {{"prompt":"...","size":"small|medium|large" (or pixel size), "style":"<optional>"}}. Do not claim you cannot generate or display images; instead, request image generation via the tool. Keep spoken summaries concise and cite sources by domain in speech after search results are shown.'
+              instructions: 'You are Alita, a helpful live voice assistant running inside AlitaOS. You CAN and SHOULD use web search for any query that is time-sensitive or requires current information. Emit either search("<concise query>") or a JSON object {{"query":"...","provider":"tavily|duckduckgo","max_results":6}} as text output so the UI can run the tool. Do this for: latest news on X, current price of Y, current time in Z, weather in Z today, sports scores, CEO/current leadership now, market open status today, etc. Do not say you cannot provide real-time information; instead, output the JSON payload and wait for results. When the user asks for an image, emit a JSON object with {{"prompt":"...","size":"small|medium|large" (or pixel size), "style":"<optional>"}}. Keep spoken summaries concise and cite sources by domain in speech after search results are shown.'
             }}
           }}));
         }} catch(e){{}}
@@ -907,11 +1103,15 @@ def handle_live_assistant():
       dc.onmessage = (evt) => {{
         // Record last event for dedupe context
         try {{ window.__lastEventRaw = evt.data; }} catch {{}}
-        // Attempt tool handling first
-        if (tryHandleTool(evt.data)) return;
         try {{
           const msg = JSON.parse(evt.data);
           try {{ window.__lastEvent = msg; }} catch {{}}
+          try {{
+            if (msg && typeof msg.type === 'string') {{
+              if (msg.type === 'response.created') {{ try {{ window.__activeResponseId = (msg.response && msg.response.id) || null; }} catch {{}} }}
+              if (msg.type === 'response.done') {{ try {{ window.__activeResponseId = null; }} catch {{}} }}
+            }}
+          }} catch {{}}
           logRaw(msg, 'dc.onmessage');
           if (tryHandleTool(msg)) return;
           const text = extractTextFromEvent(msg);
@@ -924,10 +1124,15 @@ def handle_live_assistant():
         const ch = evt.channel;
         ch.onmessage = (e) => {{
           try {{ window.__lastEventRaw = e.data; }} catch {{}}
-          if (tryHandleTool(e.data)) return;
           try {{
             const j = JSON.parse(e.data);
             try {{ window.__lastEvent = j; }} catch {{}}
+            try {{
+              if (j && typeof j.type === 'string') {{
+                if (j.type === 'response.created') {{ try {{ window.__activeResponseId = (j.response && j.response.id) || null; }} catch {{}} }}
+                if (j.type === 'response.done') {{ try {{ window.__activeResponseId = null; }} catch {{}} }}
+              }}
+            }} catch {{}}
             logRaw(j, 'pc.ondatachannel');
             if (tryHandleTool(j)) return;
             const t = extractTextFromEvent(j);
@@ -972,7 +1177,15 @@ def handle_live_assistant():
           const alt = u2.toString();
           logRaw(`retry POST ${{alt}}`, 'sdp');
           resp = await postSdp(alt);
-        }} catch (e2) {{ throw e2; }}
+        }} catch (e2) {{
+          try {{
+            const u3 = new URL(sdpUrl);
+            u3.hostname = (u3.hostname === 'localhost') ? '127.0.0.1' : 'localhost';
+            const alt2 = u3.toString();
+            logRaw(`retry POST ${{alt2}}`, 'sdp');
+            resp = await postSdp(alt2);
+          }} catch (e3) {{ throw e3; }}
+        }}
       }}
       if (!resp.ok) {{ logRaw(`SDP failed ${{resp.status}}`, 'error'); throw new Error('SDP exchange failed: ' + resp.status); }}
       const answerSdp = await resp.text();
@@ -1069,7 +1282,8 @@ def handle_information_search():
                     if result.get("success"):
                         st.success("Search completed!")
                         st.markdown("### Results:")
-                        st.markdown(result.get("response", "No results found."))
+                        # search_information returns {"success": bool, "answer": str}
+                        st.markdown(result.get("answer", "No results found."))
                     else:
                         st.error(f"Search failed: {result.get('error', 'Unknown error')}")
                 except Exception as e:

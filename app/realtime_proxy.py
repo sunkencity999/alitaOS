@@ -23,28 +23,35 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 import requests
 from typing import Any
+import re
+import logging
+from dotenv import load_dotenv, find_dotenv
+
+
+# Load environment from nearest .env (project root) before reading keys
+try:
+    load_dotenv(find_dotenv())
+except Exception:
+    pass
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_REALTIME_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview-2024-12-17")
 OPENAI_REALTIME_URL = f"https://api.openai.com/v1/realtime?model={OPENAI_REALTIME_MODEL}"
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+log = logging.getLogger("realtime_proxy")
+
 app = FastAPI(title="AlitaOS Realtime Proxy")
 
-# Allow localhost origins (HTTP/HTTPS) for Streamlit UI
-ALLOWED_ORIGINS = [
-    "http://localhost:8501",
-    "https://localhost:8501",
-    "http://127.0.0.1:8501",
-    "https://127.0.0.1:8501",
-]
-
+# Allow any localhost origin (any port, http/https)
+# In dev, allow any origin; we do not use credentials in these calls.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS + ["http://localhost", "https://localhost", "http://127.0.0.1", "https://127.0.0.1"],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["*"]
+    allow_headers=["*"],
 )
 
 @app.get("/health")
@@ -58,6 +65,7 @@ async def sdp(request: Request):
 
     offer_sdp = await request.body()
     try:
+        log.info("/sdp: forwarding offer to OpenAI Realtime: %s", OPENAI_REALTIME_MODEL)
         resp = requests.post(
             OPENAI_REALTIME_URL,
             data=offer_sdp,
@@ -68,14 +76,100 @@ async def sdp(request: Request):
             },
             timeout=30,
         )
+        log.info("/sdp: OpenAI response status=%s", resp.status_code)
         return Response(content=resp.text, media_type="application/sdp", status_code=resp.status_code)
     except Exception as e:
+        log.exception("/sdp: proxy error: %s", e)
         return Response(content=f"Proxy error: {e}", media_type="text/plain", status_code=500)
+
+
+# Explicit preflight handlers (defensive; CORSMiddleware should handle this)
+@app.options("/sdp")
+async def sdp_options():
+    return Response(status_code=200)
+
+@app.options("/tool")
+async def tool_options():
+    return Response(status_code=200)
 
 
 class ToolPayload(BaseModel):
     name: str
     args: dict | None = None
+
+
+# --- Time resolver helpers -------------------------------------------------
+_CITY_TZ_MAP: dict[str, str] = {
+    # US
+    "new york": "America/New_York",
+    "nyc": "America/New_York",
+    "los angeles": "America/Los_Angeles",
+    "la": "America/Los_Angeles",
+    "san francisco": "America/Los_Angeles",
+    "seattle": "America/Los_Angeles",
+    "chicago": "America/Chicago",
+    "austin": "America/Chicago",
+    "denver": "America/Denver",
+    # Europe
+    "london": "Europe/London",
+    "paris": "Europe/Paris",
+    "berlin": "Europe/Berlin",
+    "madrid": "Europe/Madrid",
+    "rome": "Europe/Rome",
+    # Asia
+    "karachi": "Asia/Karachi",
+    "pakistan": "Asia/Karachi",
+    "delhi": "Asia/Kolkata",
+    "mumbai": "Asia/Kolkata",
+    "bangalore": "Asia/Kolkata",
+    "kolkata": "Asia/Kolkata",
+    "tokyo": "Asia/Tokyo",
+    "seoul": "Asia/Seoul",
+    "singapore": "Asia/Singapore",
+    "hong kong": "Asia/Hong_Kong",
+    "shanghai": "Asia/Shanghai",
+    "beijing": "Asia/Shanghai",
+    # Oceania
+    "sydney": "Australia/Sydney",
+    "auckland": "Pacific/Auckland",
+    # Middle East
+    "dubai": "Asia/Dubai",
+    "riyadh": "Asia/Riyadh",
+    # Misc
+    "utc": "Etc/UTC",
+    "gmt": "Etc/UTC",
+}
+
+# Be more permissive and allow trailing qualifiers like "right now" or punctuation
+_TIME_REGEX = re.compile(
+    r"\b(?:what\s+time\s+is\s+it\s+in|(?:(?:current|local)\s+)?time\s+in)\s+([A-Za-z ,\-]+?)(?:\b|\s+right\s+now\b|\s+today\b|[\.!?,]|$)",
+    re.IGNORECASE,
+)
+
+
+def _extract_place_from_query(q: str) -> str | None:
+    """Return place/city string if query looks like a time question."""
+    if not q:
+        return None
+    m = _TIME_REGEX.search(q.strip())
+    if m:
+        return m.group(1).strip(" -,.")
+    return None
+
+
+def _map_place_to_tz(place: str) -> tuple[str, str] | None:
+    """Best-effort mapping from place -> (canonical_place, IANA tz)."""
+    if not place:
+        return None
+    key = place.lower().strip()
+    # direct
+    if key in _CITY_TZ_MAP:
+        return (place, _CITY_TZ_MAP[key])
+    # try substring match on known keys
+    for k, tz in _CITY_TZ_MAP.items():
+        if k in key:
+            return (place, tz)
+    return None
 
 
 @app.post("/tool")
@@ -90,6 +184,10 @@ async def tool_exec(payload: ToolPayload):
 
     name = payload.name
     args = payload.args or {}
+    try:
+        log.info("/tool: name=%s args=%s", name, args)
+    except Exception:
+        pass
 
     if name == "image.generate":
         prompt = args.get("prompt", "")
@@ -113,6 +211,7 @@ async def tool_exec(payload: ToolPayload):
                 },
                 timeout=60,
             )
+            log.info("/tool image.generate: status=%s", resp.status_code)
             if resp.status_code != 200:
                 return JSONResponse({"success": False, "error": f"OpenAI error {resp.status_code}: {resp.text}"}, status_code=resp.status_code)
             data = resp.json()
@@ -137,10 +236,37 @@ async def tool_exec(payload: ToolPayload):
         if not query:
             return JSONResponse({"success": False, "error": "query required"}, status_code=400)
         try:
+            # Try direct time resolver first
             results: list[dict[str, Any]] = []
+            place = _extract_place_from_query(query)
+            if place:
+                mapped = _map_place_to_tz(place)
+                if mapped:
+                    place_label, tz = mapped
+                    try:
+                        tz_resp = requests.get(f"https://worldtimeapi.org/api/timezone/{tz}", timeout=15)
+                        log.info("/tool search.web: time resolver tz=%s status=%s", tz, getattr(tz_resp, 'status_code', 'n/a'))
+                        if tz_resp.status_code == 200:
+                            tdata = tz_resp.json()
+                            return JSONResponse({
+                                "success": True,
+                                "type": "time",
+                                "place": place_label,
+                                "tz": tz,
+                                "datetime_iso": tdata.get("datetime"),
+                                "utc_offset": tdata.get("utc_offset"),
+                                "abbreviation": tdata.get("abbreviation"),
+                                "source_url": f"https://worldtimeapi.org/api/timezone/{tz}",
+                            })
+                        # else: fall through to provider search below
+                    except Exception:
+                        pass
+
+            # Provider web search
+            if not place:
+                log.info("/tool search.web: no time place extracted from query='%s'", query)
             if provider == "tavily":
                 if not TAVILY_API_KEY:
-                    # Fallback to DDG if no key
                     provider = "duckduckgo"
                 else:
                     resp = requests.post(
@@ -153,6 +279,7 @@ async def tool_exec(payload: ToolPayload):
                         },
                         timeout=30,
                     )
+                    log.info("/tool search.web: provider=tavily status=%s", resp.status_code)
                     if resp.status_code != 200:
                         return JSONResponse({"success": False, "error": f"Search error {resp.status_code}: {resp.text}"}, status_code=resp.status_code)
                     data = resp.json()
@@ -175,6 +302,7 @@ async def tool_exec(payload: ToolPayload):
                         timeout=20,
                     )
                 resp = ddg_request()
+                log.info("/tool search.web: provider=duckduckgo status=%s", resp.status_code)
                 if resp.status_code != 200:
                     # Treat 202 (offline/test backends) as empty-success rather than loud error
                     if resp.status_code == 202:
@@ -190,6 +318,7 @@ async def tool_exec(payload: ToolPayload):
                         else:
                             body = resp.text if isinstance(resp.text, str) else str(resp.text)
                             body = (body[:500] + "…") if len(body) > 500 else body
+                            log.warning("/tool search.web: duckduckgo error status=%s body=%s", resp.status_code, body)
                             return JSONResponse(
                                 {"success": False, "error": f"provider=duckduckgo status={resp.status_code} body={body}"},
                                 status_code=resp.status_code,
@@ -223,6 +352,32 @@ async def tool_exec(payload: ToolPayload):
                     })
                 results = results[:max_results]
 
+            log.info("/tool search.web: results=%d provider=%s", len(results), provider)
+            # If DuckDuckGo returned an empty 202 and this looks like a time query, try time resolver again as a fallback
+            if not results:
+                place_fb = _extract_place_from_query(query)
+                if place_fb:
+                    mapped = _map_place_to_tz(place_fb)
+                    if mapped:
+                        place_label, tz = mapped
+                        try:
+                            tz_resp = requests.get(f"https://worldtimeapi.org/api/timezone/{tz}", timeout=15)
+                            log.info("/tool search.web: fallback time resolver tz=%s status=%s", tz, getattr(tz_resp, 'status_code', 'n/a'))
+                            if tz_resp.status_code == 200:
+                                tdata = tz_resp.json()
+                                return JSONResponse({
+                                    "success": True,
+                                    "type": "time",
+                                    "place": place_label,
+                                    "tz": tz,
+                                    "datetime_iso": tdata.get("datetime"),
+                                    "utc_offset": tdata.get("utc_offset"),
+                                    "abbreviation": tdata.get("abbreviation"),
+                                    "source_url": f"https://worldtimeapi.org/api/timezone/{tz}",
+                                })
+                        except Exception:
+                            pass
+
             return JSONResponse({
                 "success": True,
                 "type": "search",
@@ -231,6 +386,7 @@ async def tool_exec(payload: ToolPayload):
                 "provider": provider,
             })
         except Exception as e:
+            log.exception("/tool search.web: exception: %s", e)
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
     return JSONResponse({"success": False, "error": f"unknown tool: {name}"}, status_code=400)
