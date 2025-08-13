@@ -388,6 +388,18 @@ def handle_live_assistant():
     margin: 10px auto 0;
     box-shadow: 0 1px 0 rgba(0,0,0,0.02), 0 0 0 1px rgba(0,0,0,0.02) inset;
   }}
+  /* Below-transcript loading notifier */
+  #notifier {{ 
+    display:none; align-items:center; justify-content:center; gap:10px; 
+    margin: 10px auto 0; padding:10px 14px; border:1px solid var(--border); border-radius:12px; 
+    background: var(--panel-2); color: var(--text); max-width: 760px;
+  }}
+  #notifier .spin {{
+    width:16px; height:16px; border:3px solid rgba(0,0,0,0.12); border-top-color: var(--acc); border-radius:50%;
+    animation: alita-spin 0.8s linear infinite;
+  }}
+  #notifier .text {{ font-size: 13px; color: var(--muted); }}
+  @keyframes alita-spin {{ from {{ transform: rotate(0deg); }} to {{ transform: rotate(360deg); }} }}
   .msg {{ display:block; max-width: 100%; padding:8px 10px; border-radius:12px; margin:6px 0; line-height:1.45; white-space:pre-wrap; }}
   .u {{ background:#eceef2; color: var(--text); border:1px solid var(--border); }}
   .a {{ background:#f5f6f8; color: var(--text); border:1px solid var(--border); }}
@@ -412,6 +424,10 @@ def handle_live_assistant():
     <span id=status>Idle</span>
   </div>
   <div id=transcript title="Live transcript"></div>
+  <div id=notifier>
+    <div class="spin" aria-hidden="true"></div>
+    <div id=notifier-text class="text">Working…</div>
+  </div>
   <details id=rawbox style="margin-top:10px;">
     <summary>Show raw events</summary>
     <pre id=rawlog style="background:var(--panel-2); border:1px solid var(--border); border-radius:10px; padding:8px; max-height:clamp(160px, 24vh, 360px); overflow:auto; color:var(--text);"></pre>
@@ -458,6 +474,30 @@ def handle_live_assistant():
     let analyser, audioCtx, raf;
     const rawLogEl = document.getElementById('rawlog');
     let toolBuf = '';
+    // Notifier helpers
+    const notifierEl = document.getElementById('notifier');
+    const notifierText = document.getElementById('notifier-text');
+    if (!window.__loadingReasons) window.__loadingReasons = new Map();
+    function updateNotifier() {{
+      try {{
+        const reasons = window.__loadingReasons;
+        if (reasons && reasons.size > 0) {{
+          // Show the last inserted reason's message
+          let msg = 'Working…';
+          for (const v of reasons.values()) msg = v || msg;
+          if (notifierText) notifierText.textContent = msg;
+          if (notifierEl) notifierEl.style.display = 'flex';
+        }} else {{
+          if (notifierEl) notifierEl.style.display = 'none';
+        }}
+      }} catch (_) {{}}
+    }}
+    function setLoading(reason, message) {{
+      try {{ window.__loadingReasons.set(String(reason), String(message || 'Working…')); updateNotifier(); }} catch(_ ){{}}
+    }}
+    function clearLoading(reason) {{
+      try {{ window.__loadingReasons.delete(String(reason)); updateNotifier(); }} catch(_){{}}
+    }}
 
   function logRaw(obj, label='event') {{
     try {{
@@ -845,6 +885,7 @@ def handle_live_assistant():
     }}
     return false;
     function runAndRender(tool) {{
+      let key = '';
       try {{
         // Build a canonical, stable JSON string for args by sorting keys recursively
         function stableStringify(obj) {{
@@ -853,7 +894,7 @@ def handle_live_assistant():
           const keys = Object.keys(obj).sort();
           return '{{' + keys.map(k => JSON.stringify(k) + ':' + stableStringify(obj[k])).join(',') + '}}';
         }}
-        const key = tool.name + '|' + stableStringify(tool.args || {{}});
+        key = tool.name + '|' + stableStringify(tool.args || {{}});
         const now = Date.now();
         // 12s dedupe window
         if (recentTools.has(key) && now - recentTools.get(key) < 12000) {{ try {{ console.debug('[alita][tool] skip: within dedupe window for key', key); }} catch {{}}; return true; }}
@@ -869,6 +910,16 @@ def handle_live_assistant():
         const rid = getResponseId(window.__lastEvent || {{}}) || null;
         if (rid) handledByResp.set(rid, now);
         appendLine('assistant', `Running tool: ${{tool.name}}...`);
+        // Set notifier message based on tool
+        let note = 'Working…';
+        try {{
+          const n = (tool && tool.name) ? String(tool.name) : '';
+          if (n.startsWith('search')) note = 'Searching the web…';
+          else if (n === 'image.generate') note = 'Generating image…';
+          else if (n === 'file.save') note = 'Saving file…';
+          else note = 'Working…';
+        }} catch(_ ){{}}
+        setLoading('tool:' + key, note);
       }} catch {{}}
       runTool(tool.name, tool.args).then(res => {{
         try {{ logRaw('tool result ' + (res && res.type ? res.type : 'unknown'), 'tool'); }} catch {{}}
@@ -893,7 +944,7 @@ def handle_live_assistant():
         }}
         appendLine('assistant', 'Tool returned unsupported type.');
       }}).catch(err => appendLine('assistant', 'Tool error: ' + err))
-        .finally(() => {{ try {{ window.__inFlightTools.delete(key); }} catch {{}} }});
+        .finally(() => {{ try {{ window.__inFlightTools.delete(key); }} catch {{}} try {{ clearLoading('tool:' + key); }} catch {{}} }});
       return true;
     }}
   }}
@@ -1266,6 +1317,8 @@ def handle_live_assistant():
         try {{
           const msg = JSON.parse(evt.data);
           try {{ window.__lastEvent = msg; }} catch {{}}
+          try {{ if (msg && msg.type === 'response.created') setLoading('llm', 'Thinking…'); }} catch {{}}
+          try {{ if (msg && msg.type === 'response.done') clearLoading('llm'); }} catch {{}}
           try {{
             if (msg && typeof msg.type === 'string') {{
               if (msg.type === 'response.created') {{ try {{ window.__activeResponseId = (msg.response && msg.response.id) || null; }} catch {{}} }}
@@ -1275,7 +1328,7 @@ def handle_live_assistant():
           logRaw(msg, 'dc.onmessage');
           if (tryHandleTool(msg)) return;
           const text = extractTextFromEvent(msg);
-          if (text) appendLine('assistant', text);
+          if (text) {{ try {{ clearLoading('llm'); }} catch {{}} appendLine('assistant', text); }}
         }} catch (e) {{
           if (typeof evt.data === 'string' && evt.data.trim()) {{ appendLine('assistant', evt.data); logRaw(evt.data, 'dc.onmessage(text)'); }}
         }}
@@ -1287,6 +1340,8 @@ def handle_live_assistant():
           try {{
             const j = JSON.parse(e.data);
             try {{ window.__lastEvent = j; }} catch {{}}
+            try {{ if (j && j.type === 'response.created') setLoading('llm', 'Thinking…'); }} catch {{}}
+            try {{ if (j && j.type === 'response.done') clearLoading('llm'); }} catch {{}}
             try {{
               if (j && typeof j.type === 'string') {{
                 if (j.type === 'response.created') {{ try {{ window.__activeResponseId = (j.response && j.response.id) || null; }} catch {{}} }}
@@ -1296,7 +1351,7 @@ def handle_live_assistant():
             logRaw(j, 'pc.ondatachannel');
             if (tryHandleTool(j)) return;
             const t = extractTextFromEvent(j);
-            if (t) appendLine('assistant', t);
+            if (t) {{ try {{ clearLoading('llm'); }} catch {{}} appendLine('assistant', t); }}
           }} catch {{
             if (typeof e.data === 'string' && e.data.trim()) {{ appendLine('assistant', e.data); logRaw(e.data, 'pc.ondatachannel(text)'); }}
           }}
