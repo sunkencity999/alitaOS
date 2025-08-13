@@ -400,6 +400,16 @@ def handle_live_assistant():
   }}
   #notifier .text {{ font-size: 13px; color: var(--muted); }}
   @keyframes alita-spin {{ from {{ transform: rotate(0deg); }} to {{ transform: rotate(360deg); }} }}
+  /* Toolbar below transcript */
+  #toolbar {{
+    display:flex; align-items:center; justify-content:center;
+    gap: 10px; margin: 8px auto 0; max-width: 760px;
+  }}
+  #toolbar button {{
+    -webkit-appearance:none; appearance:none; border:1px solid #1f232b !important; padding:8px 16px; border-radius:10px; font-weight:600; cursor:pointer;
+    color:#fff !important; background:#2b2f36 !important; min-width: 96px; font-size:13px; box-shadow:none !important;
+  }}
+  #toolbar button:hover {{ filter: brightness(1.08); }}
   .msg {{ display:block; max-width: 100%; padding:8px 10px; border-radius:12px; margin:6px 0; line-height:1.45; white-space:pre-wrap; }}
   .u {{ background:#eceef2; color: var(--text); border:1px solid var(--border); }}
   .a {{ background:#f5f6f8; color: var(--text); border:1px solid var(--border); }}
@@ -427,6 +437,9 @@ def handle_live_assistant():
   <div id=notifier>
     <div class="spin" aria-hidden="true"></div>
     <div id=notifier-text class="text">Working…</div>
+  </div>
+  <div id=toolbar>
+    <button id=clearbtn title="Clear transcript and logs">Clear</button>
   </div>
   <details id=rawbox style="margin-top:10px;">
     <summary>Show raw events</summary>
@@ -477,6 +490,7 @@ def handle_live_assistant():
     // Notifier helpers
     const notifierEl = document.getElementById('notifier');
     const notifierText = document.getElementById('notifier-text');
+    const clearBtn = document.getElementById('clearbtn');
     if (!window.__loadingReasons) window.__loadingReasons = new Map();
     function updateNotifier() {{
       try {{
@@ -498,6 +512,18 @@ def handle_live_assistant():
     function clearLoading(reason) {{
       try {{ window.__loadingReasons.delete(String(reason)); updateNotifier(); }} catch(_){{}}
     }}
+    try {{
+      if (clearBtn) clearBtn.onclick = () => {{
+        try {{ transcriptEl.innerHTML = ''; }} catch {{}}
+        try {{ lastDiv = null; lastRole = null; }} catch {{}}
+        try {{ if (rawLogEl) rawLogEl.textContent = ''; }} catch {{}}
+        try {{ window.__lastAssistantText = ''; }} catch {{}}
+        try {{ if (window.__loadingReasons) window.__loadingReasons.clear(); }} catch {{}}
+        try {{ if (window.__recentTools) window.__recentTools.clear(); }} catch {{}}
+        try {{ if (window.__inFlightTools) window.__inFlightTools.clear(); }} catch {{}}
+        try {{ if (notifierEl) notifierEl.style.display = 'none'; }} catch {{}}
+      }};
+    }} catch {{}}
 
   function logRaw(obj, label='event') {{
     try {{
