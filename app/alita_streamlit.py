@@ -7,8 +7,10 @@ A streamlined AI assistant powered by OpenAI
 import streamlit as st
 import os
 import sys
-from pathlib import Path
 import base64
+import threading
+import time
+from pathlib import Path
 import io
 from PIL import Image
 import plotly.graph_objects as go
@@ -38,6 +40,8 @@ try:
     from tools.chart import create_chart
     from tools.python_file import create_python_file, execute_python_code
     from utils.ai_models import get_llm
+    from components.ai_settings import display_ai_settings, get_current_ai_info
+    from components.ollama_live_assistant import display_ollama_live_assistant
 except ImportError as e:
     st.error(f"Import error: {e}")
     st.error("Make sure you're running from the correct directory with dependencies installed")
@@ -231,42 +235,14 @@ def display_header():
       <h1>AlitaOS</h1>
       <div class="underline"></div>
     </div>
-    <div class="top-nav">
-      <span>Live Assistant</span>
-      <span>•</span>
-      <span>Chat</span>
-      <span>•</span>
-      <span>Images</span>
-      <span>•</span>
-      <span>Search</span>
-      <span>•</span>
-      <span>Reports</span>
-      <span>•</span>
-      <span>Coding</span>
-    </div>
     """, unsafe_allow_html=True)
+    
+    # Display AI settings
+    display_ai_settings()
 
 def get_selected_tool() -> str:
-    """Read the selected tool from query params (top nav links)."""
-    mapping = {
-        "live": "🎧 Live Assistant",
-        "chat": "💬 Chat Assistant",
-        "images": "🖼️ Image Generation",
-        "search": "🔍 Information Search",
-        "stocks": "📈 Stock Prices",
-        "charts": "📊 Data Visualization",
-        "python": "🐍 Python Code",
-    }
-    default_key = "live"
-    try:
-        qp = st.query_params
-        tab = qp.get("tab")
-        if isinstance(tab, list):
-            tab = tab[0] if tab else None
-        tab = tab or default_key
-    except Exception:
-        tab = default_key
-    return mapping.get(tab, mapping[default_key])
+    """Always return Live Assistant since it's the only view."""
+    return "🎧 Live Assistant"
 
 def handle_chat_assistant():
     """Handle the chat assistant functionality"""
@@ -287,18 +263,28 @@ def handle_chat_assistant():
         with st.chat_message("user"):
             st.markdown(prompt)
         
-        # Generate assistant response
+        # Generate assistant response with streaming
         with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                try:
-                    response = st.session_state.llm.invoke(prompt)
-                    response_text = response.content if hasattr(response, 'content') else str(response)
-                    st.markdown(response_text)
-                    st.session_state.messages.append({"role": "assistant", "content": response_text})
-                except Exception as e:
-                    error_msg = f"Error: {str(e)}"
-                    st.error(error_msg)
-                    st.session_state.messages.append({"role": "assistant", "content": error_msg})
+            try:
+                # Get the configured AI provider
+                llm = get_llm(task="default")
+                
+                # Use streaming for real-time response
+                response_placeholder = st.empty()
+                full_response = ""
+                
+                for chunk in llm.stream(prompt):
+                    full_response += chunk
+                    response_placeholder.markdown(full_response + "▌")
+                
+                # Final response without cursor
+                response_placeholder.markdown(full_response)
+                st.session_state.messages.append({"role": "assistant", "content": full_response})
+                
+            except Exception as e:
+                error_msg = f"Error: {str(e)}"
+                st.error(error_msg)
+                st.session_state.messages.append({"role": "assistant", "content": error_msg})
 
 def handle_live_assistant():
     """True OpenAI Realtime 'live' API via WebRTC (browser <-> OpenAI) with local proxy."""
@@ -346,10 +332,8 @@ def handle_live_assistant():
     # Decide default search provider based on env (Tavily if key present)
     provider_default = "tavily" if os.getenv("TAVILY_API_KEY") else "auto"
 
-    # Provide Start/Stop UI with transcript and animated avatar (centered via Streamlit columns)
-    left_col, mid_col, right_col = st.columns([1, 8, 1], gap="small")
-    with mid_col:
-        st_html(
+    # Provide Start/Stop UI with transcript and animated avatar
+    st_html(
             fr"""
 <style>
   :root {{
@@ -1469,10 +1453,10 @@ def handle_live_assistant():
     }}
   }} catch {{}}
 </script>
-        """,
-        height=650,
-        width=1060,
-    )
+            """,
+            height=650,
+            width=1060,
+        )
 
 def handle_image_generation():
     """Handle image generation"""
@@ -1758,31 +1742,143 @@ def main():
     initialize_session_state()
     display_header()
 
-    # Get selected tool from the top navbar (no sidebar)
-    selected_tool = get_selected_tool()
+    # Show two live assistant options: OpenAI Live and Ollama Live
+    col1, col2 = st.columns(2)
     
-    # Handle the selected tool
-    if selected_tool == "🎧 Live Assistant":
-        handle_live_assistant()
-    elif selected_tool == "💬 Chat Assistant":
-        handle_chat_assistant()
-    elif selected_tool == "🖼️ Image Generation":
-        handle_image_generation()
-    elif selected_tool == "🔍 Information Search":
-        handle_information_search()
-    elif selected_tool == "📈 Stock Prices":
-        handle_stock_prices()
-    elif selected_tool == "📊 Data Visualization":
-        handle_data_visualization()
-    elif selected_tool == "🐍 Python Code":
-        handle_python_code()
+    # Get current selection for styling
+    current_view = st.session_state.get("selected_view", "openai_live")
+    
+    # Use JavaScript to override CSS classes and directly style buttons
+    st.components.v1.html(f"""
+    <script>
+    function styleViewButtons() {{
+        // Wait for buttons to be rendered
+        setTimeout(() => {{
+            // First, inject CSS to override the problematic class
+            let styleSheet = document.getElementById('custom-button-override');
+            if (!styleSheet) {{
+                styleSheet = document.createElement('style');
+                styleSheet.id = 'custom-button-override';
+                document.head.appendChild(styleSheet);
+            }}
+            
+            // Override the problematic CSS class with maximum specificity
+            styleSheet.textContent = `
+                .st-emotion-cache-1anq8dj.gold-active,
+                button[data-testid="baseButton-secondary"].gold-active,
+                .stButton > button.gold-active {{
+                    background: linear-gradient(135deg, #FFD700, #FFA500) !important;
+                    color: #1f2937 !important;
+                    border: 1px solid #FFD700 !important;
+                    font-weight: 600 !important;
+                    box-shadow: 0 2px 8px rgba(255, 215, 0, 0.3) !important;
+                }}
+                
+                .st-emotion-cache-1anq8dj.gray-inactive,
+                button[data-testid="baseButton-secondary"].gray-inactive,
+                .stButton > button.gray-inactive {{
+                    background: #6b7280 !important;
+                    color: white !important;
+                    border: 1px solid rgba(250, 250, 250, 0.2) !important;
+                    font-weight: 500 !important;
+                    box-shadow: none !important;
+                }}
+            `;
+            
+            // Now apply classes to buttons
+            const buttons = document.querySelectorAll('button');
+            
+            buttons.forEach(button => {{
+                const buttonText = button.textContent || button.innerText;
+                
+                if (buttonText.includes('OpenAI Live') || buttonText.includes('Ollama Live')) {{
+                    // Remove any existing custom classes
+                    button.classList.remove('gold-active', 'gray-inactive');
+                    
+                    if (buttonText.includes('OpenAI Live') && '{current_view}' === 'openai_live') {{
+                        button.classList.add('gold-active');
+                    }} else if (buttonText.includes('Ollama Live') && '{current_view}' === 'ollama_live') {{
+                        button.classList.add('gold-active');
+                    }} else {{
+                        button.classList.add('gray-inactive');
+                    }}
+                }}
+            }});
+        }}, 100);
+    }}
+    
+    // Run immediately and also observe for changes
+    styleViewButtons();
+    
+    // Create observer to re-style when Streamlit re-renders
+    const observer = new MutationObserver(styleViewButtons);
+    observer.observe(document.body, {{ childList: true, subtree: true }});
+    
+    // Also run on window load and with a longer delay
+    window.addEventListener('load', styleViewButtons);
+    setTimeout(styleViewButtons, 500);
+    setTimeout(styleViewButtons, 1000);
+    </script>
+    """, height=0)
+    
+    with col1:
+        button_type = "primary" if current_view == "openai_live" else "secondary"
+        if st.button("🎧 OpenAI Live", use_container_width=True, type=button_type, key="openai_live_btn"):
+            st.session_state.selected_view = "openai_live"
+            # Auto-select OpenAI provider
+            st.session_state.ai_provider = "openai"
+            st.session_state.ai_model = "gpt-4o-mini"
+            st.rerun()
+    
+    with col2:
+        button_type = "primary" if current_view == "ollama_live" else "secondary"
+        if st.button("🤖 Ollama Live", use_container_width=True, type=button_type, key="ollama_live_btn"):
+            st.session_state.selected_view = "ollama_live"
+            # Auto-select Ollama provider
+            st.session_state.ai_provider = "ollama"
+            # Set to a commonly available model or keep current if it's an Ollama model
+            current_model = st.session_state.get('ai_model', '')
+            if not any(current_model.startswith(prefix) for prefix in ['llama', 'mistral', 'codellama', 'phi', 'gemma', 'qwen']):
+                # Use a common default Ollama model
+                st.session_state.ai_model = "llama3.2"
+            st.rerun()
+    
+    # Initialize selected view
+    if "selected_view" not in st.session_state:
+        st.session_state.selected_view = "openai_live"
+        st.session_state.ai_provider = "openai"
+        st.session_state.ai_model = "gpt-4o-mini"
+    
+    st.markdown("---")
+    
+    # Get updated AI info after potential provider change
+    ai_info = get_current_ai_info()
+    
+    # Show selected view with consistent column layout
+    left_col, mid_col, right_col = st.columns([1, 8, 1], gap="small")
+    
+    # Ensure consistent flex-flow behavior
+    st.markdown("""
+    <style>
+    .st-emotion-cache-1permvm, .st-emotion-cache-159b5ki, [data-testid="column"] {
+        flex-flow: wrap !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    with mid_col:
+        if st.session_state.selected_view == "openai_live":
+            handle_live_assistant()
+        else:
+            display_ollama_live_assistant()
     
     # Footer
     st.markdown("---")
     st.markdown("""
     <div style="text-align: center; color: #666; padding: 1rem;">
-        🤖 <strong>AlitaOS</strong> - Powered by OpenAI | 
-        <a href="https://github.com/openai" target="_blank">OpenAI API</a> | 
+        🤖 <strong>AlitaOS</strong> - Powered by OpenAI & Ollama | 
+        <a href="https://github.com/openai" target="_blank">OpenAI API</a> • 
+        <a href="https://ollama.ai" target="_blank">Ollama</a> | 
         Built with ❤️ using Streamlit
     </div>
     """, unsafe_allow_html=True)

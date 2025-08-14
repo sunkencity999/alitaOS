@@ -1,12 +1,12 @@
-"""Simple information search via OpenAI for Streamlit.
+"""Simple information search using AI providers for Streamlit.
 
-Provides `search_information(query)` which calls OpenAI to produce a
+Provides `search_information(query)` which calls the configured AI provider to produce a
 concise, factual summary and returns a dict suitable for Streamlit.
 """
 
 import os
-from openai import OpenAI
 from utils.common import logger
+from utils.ai_models import get_llm
 def search_information(query: str):
     """Return information for a query using OpenAI.
 
@@ -15,29 +15,22 @@ def search_information(query: str):
     try:
         logger.info(f"🕵 Searching for information about: '{query}'")
         
-        # Initialize OpenAI client
-        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        # Get configured AI provider
+        llm = get_llm(task="default")
         
-        # Use OpenAI to provide comprehensive information about the query
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that provides comprehensive, accurate, and up-to-date information about any topic. Provide detailed answers with relevant facts, context, and explanations."
-                },
-                {
-                    "role": "user",
-                    "content": f"Please provide comprehensive information about: {query}"
-                }
-            ],
-            max_tokens=1000,
-            temperature=0.3
+        # Use AI provider to provide comprehensive information about the query
+        system_prompt = "You are a helpful assistant that provides comprehensive, accurate, and up-to-date information about any topic. Provide detailed answers with relevant facts, context, and explanations."
+        
+        response_text = llm.invoke(
+            prompt=f"Please provide comprehensive information about: {query}",
+            system_prompt=system_prompt
         )
         
-        search_result = response.choices[0].message.content
-        logger.info(f"📏 Information about '{query}' retrieved successfully.")
-        return {"success": True, "answer": search_result}
+        return {
+            "success": True,
+            "answer": response_text,
+            "error": None
+        }
         
     except Exception as e:
         logger.error(f"❌ Error retrieving information: {str(e)}")
