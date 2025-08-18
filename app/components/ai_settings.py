@@ -46,7 +46,7 @@ def display_ai_settings():
         with st.container():
             st.markdown("""
             <div class="tool-card">
-                <h4 style="margin-top: 0; color: var(--charcoal);">🤖 AI Provider Settings</h4>
+                <h4 style="margin-top: 0; color: var(--charcoal);">🅰️ AI Provider Settings</h4>
                 <style>
                 /* Fix radio button and text styling */
                 .stRadio > div {

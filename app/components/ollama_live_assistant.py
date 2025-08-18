@@ -35,7 +35,7 @@ def display_ollama_live_assistant():
     app_dir = Path(__file__).parent.parent
     
     # Load avatar image from common locations and formats, prefer app/static/alita.*
-    avatar_src = "https://placehold.co/144x144?text=🤖"
+    avatar_src = "https://placehold.co/144x144/667eea/ffffff?text=A"
     candidate_paths = [
         app_dir / "static" / "alita.jpg",
         app_dir / "static" / "alita.jpeg",
@@ -144,7 +144,7 @@ def display_ollama_live_assistant():
 <div id=outer>
   <div id=container>
   <div id=avatar-row>
-    <img id=avatar src="{avatar_src}" alt="Alita Avatar" onerror="this.onerror=null; this.src='https://placehold.co/84x84?text=🤖';" />
+    <img id=avatar src="{avatar_src}" alt="Alita Avatar" onerror="this.onerror=null; this.src='https://placehold.co/84x84/667eea/ffffff?text=A';" />
   </div>
   <div id=buttons-row>
     <button id=start>Start</button>

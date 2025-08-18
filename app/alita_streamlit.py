@@ -61,7 +61,7 @@ except Exception:
 # Page configuration
 st.set_page_config(
     page_title="AlitaOS",
-    page_icon="🤖",
+    page_icon="./static/alita_icon.svg",
     layout="centered",
     initial_sidebar_state="collapsed"
 )
@@ -304,7 +304,7 @@ def handle_live_assistant():
     proxy_url = os.getenv("ALITA_REALTIME_URL", proxy_url_default)
 
     # Load avatar image from common locations and formats, prefer app/static/alita.*
-    avatar_src = "https://placehold.co/144x144?text=Alita"
+    avatar_src = "https://placehold.co/144x144/667eea/ffffff?text=A"
     candidate_paths = [
         app_dir / "static" / "alita.jpg",
         app_dir / "static" / "alita.jpeg",
@@ -402,7 +402,7 @@ def handle_live_assistant():
 <div id=outer>
   <div id=container>
   <div id=avatar-row>
-    <img id=avatar src="{avatar_src}" alt="Alita Avatar" onerror="this.onerror=null; this.src='https://placehold.co/84x84?text=Alita';" />
+    <img id=avatar src="{avatar_src}" alt="Alita Avatar" onerror="this.onerror=null; this.src='https://placehold.co/84x84/667eea/ffffff?text=A';" />
   </div>
   <div id=buttons-row>
     <button id=start>Start</button>
@@ -1832,7 +1832,7 @@ def main():
     
     with col2:
         button_type = "primary" if current_view == "ollama_live" else "secondary"
-        if st.button("🤖 Ollama Live", use_container_width=True, type=button_type, key="ollama_live_btn"):
+        if st.button("🎧 Ollama Live", use_container_width=True, type=button_type, key="ollama_live_btn"):
             st.session_state.selected_view = "ollama_live"
             # Auto-select Ollama provider
             st.session_state.ai_provider = "ollama"
@@ -1876,7 +1876,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style="text-align: center; color: #666; padding: 1rem;">
-        🤖 <strong>AlitaOS</strong> - Powered by OpenAI & Ollama | 
+        🅰️ <strong>AlitaOS</strong> - Powered by OpenAI & Ollama | 
         <a href="https://github.com/openai" target="_blank">OpenAI API</a> • 
         <a href="https://ollama.ai" target="_blank">Ollama</a> | 
         Built with ❤️ using Streamlit
